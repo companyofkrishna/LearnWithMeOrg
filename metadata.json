@@ -1,0 +1,6 @@
+{
+  "name": "Automated Book-to-Video Media Agent Pipeline",
+  "description": "Production-grade dual LLM orchestration agent workspace to parse book PDFs, synthesize script videos with talking avatars, and publish playlists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
