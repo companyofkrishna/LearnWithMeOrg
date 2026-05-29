@@ -17,6 +17,7 @@ interface Book {
   status: "Pending" | "Processing" | "WaitingApproval" | "Completed";
   description: string;
   coverColor: string;
+  progressHistory: number[];
 }
 
 // In-Memory SQLite Simulator database to prevent package locks and ensure high-speed processing
@@ -29,6 +30,7 @@ let booksDB: Book[] = [
     status: "Processing",
     description: "Sun Tzu's classic treatise on military tactics, strategy, and political systems.",
     coverColor: "from-red-600 to-amber-900",
+    progressHistory: [0, 1, 1, 2, 2, 4]
   },
   {
     id: 2,
@@ -38,6 +40,7 @@ let booksDB: Book[] = [
     status: "Completed",
     description: "Philosophical writings of Roman Emperor Marcus Aurelius on Stoic practice and virtue.",
     coverColor: "from-slate-700 to-indigo-950",
+    progressHistory: [0, 2, 4, 5, 8, 10, 12]
   },
   {
     id: 3,
@@ -47,6 +50,7 @@ let booksDB: Book[] = [
     status: "Pending",
     description: "Homer's epic journey of Odysseus returning home to Ithaca after the fall of Troy.",
     coverColor: "from-blue-600 to-cyan-950",
+    progressHistory: [0]
   },
   {
     id: 4,
@@ -56,6 +60,7 @@ let booksDB: Book[] = [
     status: "Processing",
     description: "Core paradigms regarding markets, choice utility, and financial policy structures.",
     coverColor: "from-emerald-700 to-teal-980",
+    progressHistory: [0, 1, 1, 2]
   }
 ];
 
@@ -122,6 +127,14 @@ async function startServer() {
     }
   }
 
+  // System Settings state
+  const appSettings = {
+    customGeminiApiKey: "",
+    geminiModel: "gemini-2.5-flash",
+    simulationSpeed: 1, // standard 1x, faster speeds scale sleeps down
+    autoApprove: false,
+  };
+
   // Set up Gemini SDK connection securely
   let hasGemini = !!process.env.GEMINI_API_KEY;
   let ai: GoogleGenAI | null = null;
@@ -148,7 +161,94 @@ async function startServer() {
 
   // Health check
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", geminiEnabled: hasGemini });
+    res.json({ status: "ok", geminiEnabled: hasGemini, appSettings: {
+      hasCustomKey: !!appSettings.customGeminiApiKey,
+      hasDefaultKey: !!process.env.GEMINI_API_KEY,
+      geminiModel: appSettings.geminiModel,
+      simulationSpeed: appSettings.simulationSpeed,
+      autoApprove: appSettings.autoApprove
+    } });
+  });
+
+  // GET Settings configuration configuration
+  app.get("/api/settings", (req, res) => {
+    res.json({
+      hasCustomKey: !!appSettings.customGeminiApiKey,
+      hasDefaultKey: !!process.env.GEMINI_API_KEY,
+      geminiModel: appSettings.geminiModel,
+      simulationSpeed: appSettings.simulationSpeed,
+      autoApprove: appSettings.autoApprove
+    });
+  });
+
+  // POST Settings configurations update
+  app.post("/api/settings", (req, res) => {
+    const { geminiApiKey, geminiModel, simulationSpeed, autoApprove } = req.body;
+
+    if (geminiApiKey !== undefined) {
+      appSettings.customGeminiApiKey = geminiApiKey;
+      if (geminiApiKey) {
+        try {
+          ai = new GoogleGenAI({
+            apiKey: geminiApiKey,
+            httpOptions: {
+              headers: {
+                "User-Agent": "aistudio-build",
+              }
+            }
+          });
+          hasGemini = true;
+          console.log("[GEMINI] Custom user API Key registered active.");
+        } catch (e) {
+          console.error("[GEMINI] Custom API Key instantiation crashed:", e);
+        }
+      } else {
+        // Fall back to original dot-env key
+        hasGemini = !!process.env.GEMINI_API_KEY;
+        if (hasGemini) {
+          ai = new GoogleGenAI({
+            apiKey: process.env.GEMINI_API_KEY!,
+            httpOptions: {
+              headers: {
+                "User-Agent": "aistudio-build",
+              }
+            }
+          });
+        } else {
+          ai = null;
+        }
+      }
+    }
+
+    if (geminiModel !== undefined) {
+      appSettings.geminiModel = geminiModel;
+    }
+
+    if (simulationSpeed !== undefined) {
+      appSettings.simulationSpeed = Number(simulationSpeed) || 1;
+    }
+
+    if (autoApprove !== undefined) {
+      appSettings.autoApprove = !!autoApprove;
+    }
+
+    broadcast({
+      type: "LOG_STREAM",
+      node: "SYSTEM",
+      level: "INFO",
+      message: `[SETTINGS] Updated settings: Model = ${appSettings.geminiModel} | SpeedMultiplier = ${appSettings.simulationSpeed}x | AutoApprove = ${appSettings.autoApprove ? "ON" : "OFF"}`
+    });
+
+    res.json({
+      message: "Configurations updated successfully.",
+      settings: {
+        hasCustomKey: !!appSettings.customGeminiApiKey,
+        hasDefaultKey: !!process.env.GEMINI_API_KEY,
+        geminiModel: appSettings.geminiModel,
+        simulationSpeed: appSettings.simulationSpeed,
+        autoApprove: appSettings.autoApprove
+      }
+    });
   });
 
   // Get active queue
@@ -179,6 +279,7 @@ async function startServer() {
       status: "Pending",
       description: description || "Custom manual PDF book uploaded into active queue pipeline.",
       coverColor: availableColors[booksDB.length % availableColors.length],
+      progressHistory: [0]
     };
 
     booksDB.push(newBook);
@@ -197,6 +298,7 @@ async function startServer() {
         status: "Processing",
         description: "Sun Tzu's classic treatise on military tactics, strategy, and political systems.",
         coverColor: "from-red-600 to-amber-900",
+        progressHistory: [0, 1, 1, 2, 2, 4]
       },
       {
         id: 2,
@@ -206,6 +308,7 @@ async function startServer() {
         status: "Completed",
         description: "Philosophical writings of Roman Emperor Marcus Aurelius on Stoic practice and virtue.",
         coverColor: "from-slate-700 to-indigo-950",
+        progressHistory: [0, 2, 4, 5, 8, 10, 12]
       },
       {
         id: 3,
@@ -215,6 +318,7 @@ async function startServer() {
         status: "Pending",
         description: "Homer's epic journey of Odysseus returning home to Ithaca after the fall of Troy.",
         coverColor: "from-blue-600 to-cyan-950",
+        progressHistory: [0]
       },
       {
         id: 4,
@@ -224,6 +328,7 @@ async function startServer() {
         status: "Processing",
         description: "Core paradigms regarding markets, choice utility, and financial policy structures.",
         coverColor: "from-emerald-700 to-teal-980",
+        progressHistory: [0, 1, 1, 2]
       }
     ];
     activeSession = null;
@@ -313,6 +418,66 @@ async function startServer() {
     regenerateWorkflowSimulation();
   });
 
+  // Stop active running session / pipeline simulation
+  app.post("/api/flow/stop", (req, res) => {
+    if (activeSession) {
+      const targetBook = booksDB.find(b => b.id === activeSession?.bookId);
+      if (targetBook && targetBook.status === "Processing") {
+        targetBook.status = "Pending";
+      }
+      activeSession = null;
+      broadcast({ type: "QUEUE_UPDATED", books: booksDB });
+      broadcast({ type: "SESSION_TERMINATED" });
+      broadcast({
+        type: "LOG_STREAM",
+        node: "SYSTEM",
+        level: "WARNING",
+        message: "[SYSTEM ALERT] Active book queue analysis pipeline has been stopped and cancelled by administrator."
+      });
+      res.json({ message: "Active pipeline run was terminated successfully.", books: booksDB });
+    } else {
+      res.status(400).json({ error: "No active pipeline sequence is currently running." });
+    }
+  });
+
+  // Clear all books in the queue database
+  app.post("/api/books/clear", (req, res) => {
+    booksDB = [];
+    activeSession = null;
+    broadcast({ type: "QUEUE_UPDATED", books: booksDB });
+    broadcast({ type: "SESSION_TERMINATED" });
+    broadcast({
+      type: "LOG_STREAM",
+      node: "SYSTEM",
+      level: "INFO",
+      message: "[SYSTEM] The entire books database queue has been cleared by administrator."
+    });
+    res.json({ message: "All books cleared from the queue database.", books: booksDB });
+  });
+
+  // Delete an individual book from the queue
+  app.delete("/api/books/:id", (req, res) => {
+    const bookId = parseInt(req.params.id);
+    const index = booksDB.findIndex(b => b.id === bookId);
+    if (index !== -1) {
+      const removed = booksDB.splice(index, 1)[0];
+      if (activeSession && activeSession.bookId === bookId) {
+        activeSession = null;
+        broadcast({ type: "SESSION_TERMINATED" });
+      }
+      broadcast({ type: "QUEUE_UPDATED", books: booksDB });
+      broadcast({
+        type: "LOG_STREAM",
+        node: "SYSTEM",
+        level: "INFO",
+        message: `[SYSTEM] Manual removal: '${removed.title}' has been deleted from the pipeline queue.`
+      });
+      res.json({ message: `Book '${removed.title}' removed from queue.`, books: booksDB });
+    } else {
+      res.status(404).json({ error: "Book not found." });
+    }
+  });
+
   // --- Core Simulated Flow Workers ---
 
   async function generateAIEducationScript(bookTitle: string, chapterNum: number): Promise<string> {
@@ -320,7 +485,7 @@ async function startServer() {
       try {
         console.log(`[GEMINI] Generating real summary script drafts for ${bookTitle} Chapter ${chapterNum}...`);
         const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
+          model: appSettings.geminiModel,
           contents: `Create a brief 3-sentence high-retention lecturing script summarizing the key core lessons of Chapter ${chapterNum} of the classic book '${bookTitle}'. Structure it like an engaging talking avatar hook. Keep it concise, copyright-safe, and ready for publication.`,
           config: {
             systemInstruction: "You are an award-winning academic content creator and scriptwriter optimizing for viewer retention hooks."
@@ -353,11 +518,21 @@ async function startServer() {
   }
 
   // Sleep utility helper for pacing simulation logs
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const getSleepDuration = (ms: number) => {
+    return Math.max(10, Math.round(ms / appSettings.simulationSpeed));
+  };
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, getSleepDuration(ms)));
 
   async function runWorkflowSimulation(book: Book, session: PipelineSession) {
+    const checkCancelled = () => {
+      if (!activeSession || activeSession.bookId !== book.id) {
+        throw new Error("Simulation aborted - Process was stopped by the user.");
+      }
+    };
+
     try {
       // 1. PDF Extract segmentation
+      checkCancelled();
       broadcast({ type: "STATE_TICK", session });
       broadcast({
         type: "LOG_STREAM",
@@ -366,6 +541,7 @@ async function startServer() {
         message: `[PDF ENGINE] Initializing read buffer for '${book.title}'. Locating page partitions...`
       });
       await sleep(1500);
+      checkCancelled();
 
       broadcast({
         type: "LOG_STREAM",
@@ -384,6 +560,7 @@ async function startServer() {
         message: "[CACHE MANAGER] Initiating Google Gemini Context Cache session. Uploading raw text content (estimated 184,812 tokens)..."
       });
       await sleep(1500);
+      checkCancelled();
 
       broadcast({
         type: "LOG_STREAM",
@@ -402,6 +579,7 @@ async function startServer() {
         message: `[SCHOLAR AGENT - GEMINI] Reading text blocks of Chapter ${session.activeChapter}. Summarizing underlying thesis constructs...`
       });
       await sleep(2000);
+      checkCancelled();
 
       const chapterSummary = `Deconstruction of Chapter ${session.activeChapter}: Core focuses center on leverage, strategic position vectors, and maintaining focus discipline under pressure.`;
       broadcast({
@@ -423,6 +601,7 @@ async function startServer() {
       
       const realScript = await generateAIEducationScript(book.title, session.activeChapter);
       await sleep(2000);
+      checkCancelled();
 
       session.scriptText = realScript;
       broadcast({
@@ -442,6 +621,7 @@ async function startServer() {
         message: `[COPYRIGHT AGENT - GEMINI] Running plagiarism vector checks against Cached Textbook Content 'cc_3.1_f85fa3' to verify Fair Use transformative compliance.`
       });
       await sleep(1500);
+      checkCancelled();
 
       broadcast({
         type: "LOG_STREAM",
@@ -460,6 +640,7 @@ async function startServer() {
         message: "[MEDIA ENGINE] Synthesizing Voiceover MP3 track from script text. Triggering TTS voiceover matrix..."
       });
       await sleep(1500);
+      checkCancelled();
 
       session.voiceoverFile = `/audio/vo_chapter_${session.activeChapter}.mp3`;
       session.bRollKeywords = ["strategy", "tactics", "focus-room"];
@@ -472,6 +653,7 @@ async function startServer() {
         message: `[MEDIA ENGINE] Voiceover track finalized. Duration: 24.5s. Querying Pexels stock database on: ${JSON.stringify(session.bRollKeywords)}...`
       });
       await sleep(1500);
+      checkCancelled();
 
       broadcast({
         type: "LOG_STREAM",
@@ -481,19 +663,34 @@ async function startServer() {
       });
       
       // 7. Human in the loop Gate
-      session.step = "WAITING_APPROVAL";
-      session.approvalDeferred = true;
-      session.paused = true;
-      broadcast({ type: "STATE_TICK", session });
+      if (appSettings.autoApprove) {
+        broadcast({
+          type: "LOG_STREAM",
+          node: "HUMAN_GATE",
+          level: "SUCCESS",
+          message: `[HUMAN GATE] Auto-Approve is ACTIVE. Automatically auditing and signing compliance token for Chapter ${session.activeChapter}.`
+        });
+        await sleep(1000);
+        resumeWorkflowSimulation();
+      } else {
+        session.step = "WAITING_APPROVAL";
+        session.approvalDeferred = true;
+        session.paused = true;
+        broadcast({ type: "STATE_TICK", session });
 
-      broadcast({
-        type: "LOG_STREAM",
-        node: "HUMAN_GATE",
-        level: "WARNING",
-        message: `[HUMAN GATE] Chapter ${session.activeChapter} pipeline paused. Review calculated scripts and video assets in the dashboard inspect pane. Waiting user [Y/N] signal.`
-      });
+        broadcast({
+          type: "LOG_STREAM",
+          node: "HUMAN_GATE",
+          level: "WARNING",
+          message: `[HUMAN GATE] Chapter ${session.activeChapter} pipeline paused. Review calculated scripts and video assets in the dashboard inspect pane. Waiting user [Y/N] signal.`
+        });
+      }
 
     } catch (err) {
+      if (err instanceof Error && err.message.includes("Simulation aborted")) {
+        console.log("[PIPELINE] Bailing simulation loop - confirmed manual abort command.");
+        return;
+      }
       console.error("Simulation pipeline execution failure:", err);
       broadcast({
         type: "LOG_STREAM",
@@ -540,6 +737,11 @@ async function startServer() {
 
       // 9. Final SQL update
       targetBook.chaptersCompleted = Math.min(targetBook.totalChapters, targetBook.chaptersCompleted + 1);
+      if (!targetBook.progressHistory) {
+        targetBook.progressHistory = [0];
+      }
+      targetBook.progressHistory.push(targetBook.chaptersCompleted);
+
       if (targetBook.chaptersCompleted === targetBook.totalChapters) {
         targetBook.status = "Completed";
       } else {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import CodeViewer from "./components/CodeViewer";
+import { ResponsiveContainer, AreaChart, Area } from "recharts";
 import { 
   Database, 
   Terminal, 
@@ -19,7 +20,11 @@ import {
   Youtube,
   Volume2,
   Tv,
-  HelpCircle
+  HelpCircle,
+  Settings,
+  Eye,
+  EyeOff,
+  Activity
 } from "lucide-react";
 
 // Books Type Definition
@@ -31,6 +36,7 @@ interface Book {
   status: "Pending" | "Processing" | "WaitingApproval" | "Completed";
   description: string;
   coverColor: string;
+  progressHistory?: number[];
 }
 
 // Log line definition
@@ -69,12 +75,25 @@ export default function App() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [currentCaptionIdx, setCurrentCaptionIdx] = useState(0);
 
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settings, setSettings] = useState({
+    hasCustomKey: false,
+    hasDefaultKey: false,
+    geminiModel: "gemini-2.5-flash",
+    simulationSpeed: 1,
+    autoApprove: false,
+  });
+  const [customKeyInput, setCustomKeyInput] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+
   const logsEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Auto-fetch queue details on start
   useEffect(() => {
     fetchBooks();
+    fetchSettings();
     connectWebSocket();
 
     return () => {
@@ -83,6 +102,58 @@ export default function App() {
       }
     };
   }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(data);
+        if (data.hasCustomKey) {
+          setCustomKeyInput("••••••••••••••••••••••••");
+        }
+      }
+    } catch (e) {
+      console.warn("Offline fallback for loading configuration variables.", e);
+    }
+  };
+
+  const saveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSettings(true);
+    try {
+      const keyToSend = customKeyInput === "••••••••••••••••••••••••" ? undefined : customKeyInput;
+
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          geminiApiKey: keyToSend,
+          geminiModel: settings.geminiModel,
+          simulationSpeed: settings.simulationSpeed,
+          autoApprove: settings.autoApprove
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(data.settings);
+        if (data.settings.hasCustomKey) {
+          setCustomKeyInput("••••••••••••••••••••••••");
+        } else {
+          setCustomKeyInput("");
+        }
+        setShowSettingsModal(false);
+        addLogEntry("SYSTEM", "SUCCESS", "[SETTINGS] Application settings synchronized successfully with the active environment.");
+      } else {
+        addLogEntry("SYSTEM", "ERROR", "Failed to preserve options on active environment.");
+      }
+    } catch {
+      addLogEntry("SYSTEM", "ERROR", "Offline error trying to save options.");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
 
   // Sync log listings auto scroll
   useEffect(() => {
@@ -238,6 +309,62 @@ export default function App() {
     }
   };
 
+  const stopPipeline = async () => {
+    try {
+      addLogEntry("SYSTEM", "WARNING", "[ABORT ACTION] Sending request to stop active book queue analysis pipeline.");
+      const res = await fetch("/api/flow/stop", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setBooks(data.books);
+        setActiveSession(null);
+        addLogEntry("SYSTEM", "SUCCESS", "[SYSTEM] Active orchestration pipeline stopped successfully.");
+      } else {
+        const err = await res.json();
+        addLogEntry("SYSTEM", "ERROR", `Failed to stop pipeline: ${err.error || "Unknown error"}`);
+      }
+    } catch {
+      addLogEntry("SYSTEM", "ERROR", "Offline error trying to stop pipeline.");
+    }
+  };
+
+  const clearAllQueue = async () => {
+    if (confirm("Are you sure you want to clear ALL books from the queue database? This cannot be undone.")) {
+      try {
+        setLogs([]);
+        const res = await fetch("/api/books/clear", { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          setBooks(data.books);
+          setSelectedBook(null);
+          setActiveSession(null);
+          addLogEntry("SQLITE_DB", "SUCCESS", "[SQLITE] All entries wiped out. Database queue is now empty.");
+        }
+      } catch {
+        addLogEntry("SYSTEM", "ERROR", "Error clearing books queue.");
+      }
+    }
+  };
+
+  const deleteBook = async (e: React.MouseEvent, bookId: number) => {
+    e.stopPropagation(); // Avoid triggering card selection onClick
+    try {
+      const res = await fetch(`/api/books/${bookId}`, { method: "DELETE" });
+      if (res.ok) {
+        const data = await res.json();
+        setBooks(data.books);
+        addLogEntry("SQLITE_DB", "SUCCESS", `[REMOVED] Tracked book ID ${bookId} removed.`);
+        if (selectedBook?.id === bookId) {
+          setSelectedBook(data.books[0] || null);
+        }
+      } else {
+        const err = await res.json();
+        addLogEntry("SYSTEM", "ERROR", `Failed to delete: ${err.error}`);
+      }
+    } catch {
+      addLogEntry("SYSTEM", "ERROR", "Offline delete error.");
+    }
+  };
+
   const createBook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookTitle) return;
@@ -371,6 +498,19 @@ export default function App() {
             }`} />
             <span className="text-slate-400 uppercase tracking-wider">{wsStatus}</span>
           </div>
+
+          {/* Unified Simulation/Model Settings control */}
+          <button
+            id="btn-trigger-settings-modal"
+            onClick={() => {
+              fetchSettings();
+              setShowSettingsModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-800 text-slate-300 hover:text-emerald-400 transition-all text-xs font-semibold select-none cursor-pointer group"
+          >
+            <Settings className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-400 group-hover:rotate-45 transition-transform duration-300" />
+            <span className="font-sans uppercase text-[10px] tracking-wide">Settings</span>
+          </button>
         </div>
       </header>
 
@@ -391,16 +531,31 @@ export default function App() {
                     <h3 className="text-xs font-sans font-bold text-slate-300 uppercase tracking-widest">SQLite Book Queue</h3>
                   </div>
                   
-                  {/* Plus Icon to Add Book */}
-                  <button
-                    id="btn-add-book-trigger"
-                    onClick={() => setShowAddModal(true)}
-                    className="p-1 px-2 rounded bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 hover:text-emerald-200 transition-all text-xs font-medium flex items-center gap-1.5"
-                    title="Register new Book PDF"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Upload</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {/* Clear Button */}
+                    {books.length > 0 && (
+                      <button
+                        id="btn-clear-queue"
+                        onClick={clearAllQueue}
+                        className="p-1 px-2 rounded bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 hover:text-rose-200 transition-all text-[10px] font-medium tracking-wider uppercase flex items-center gap-1"
+                        title="Clear all books from queue"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Clear</span>
+                      </button>
+                    )}
+
+                    {/* Plus Icon to Add Book */}
+                    <button
+                      id="btn-add-book-trigger"
+                      onClick={() => setShowAddModal(true)}
+                      className="p-1 px-2 rounded bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 hover:text-emerald-200 transition-all text-[10px] font-medium tracking-wider uppercase flex items-center gap-1"
+                      title="Register new Book PDF"
+                    >
+                      <Plus className="w-3" />
+                      <span>Upload</span>
+                    </button>
+                  </div>
                 </div>
 
                 <p className="text-[11px] text-slate-400 leading-relaxed mb-4">
@@ -409,43 +564,100 @@ export default function App() {
 
                 {/* Queue Cards */}
                 <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
-                  {books.map((book) => {
-                    const isSelected = selectedBook?.id === book.id;
-                    const percent = getPercentage(book);
-                    
-                    return (
-                      <div
-                        key={book.id}
-                        id={`book-queue-card-${book.id}`}
-                        onClick={() => setSelectedBook(book)}
-                        className={`p-3.5 rounded-xl border text-left cursor-pointer transition-all duration-200 ${
-                          isSelected
-                            ? "bg-slate-800/60 border-emerald-500/40 shadow-md shadow-emerald-500/5"
-                            : "bg-slate-900/60 border-slate-800 hover:bg-slate-900 hover:border-slate-700/80"
-                        }`}
+                  {books.length === 0 ? (
+                    <div className="text-center py-10 border border-dashed border-slate-800 rounded-xl px-4">
+                      <BookOpen className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                      <p className="text-xs text-slate-500">Database queue is empty</p>
+                      <button
+                        onClick={() => setShowAddModal(true)}
+                        className="mt-3 text-[10px] uppercase font-bold text-emerald-400 hover:underline"
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <BookOpen className="w-3.5 h-3.5 text-slate-400" />
-                            <span className="font-sans font-semibold text-xs tracking-tight text-slate-200 limit-lines-1">
-                              {book.title}
-                            </span>
+                        Click to upload your first book
+                      </button>
+                    </div>
+                  ) : (
+                    books.map((book) => {
+                      const isSelected = selectedBook?.id === book.id;
+                      const percent = getPercentage(book);
+                      const history = book.progressHistory && book.progressHistory.length > 0 
+                        ? book.progressHistory 
+                        : [0, book.chaptersCompleted];
+                      const chartData = history.map((val, idx) => ({
+                        idx,
+                        completed: val
+                      }));
+                      
+                      return (
+                        <div
+                          key={book.id}
+                          id={`book-queue-card-${book.id}`}
+                          onClick={() => setSelectedBook(book)}
+                          className={`p-3.5 rounded-xl border text-left cursor-pointer transition-all duration-200 relative group/card ${
+                            isSelected
+                              ? "bg-slate-800/60 border-emerald-500/40 shadow-md shadow-emerald-500/5"
+                              : "bg-slate-900/60 border-slate-800 hover:bg-slate-900 hover:border-slate-700/80"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <BookOpen className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span className="font-sans font-semibold text-xs tracking-tight text-slate-200 truncate block">
+                                {book.title}
+                              </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {/* Badge */}
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wider font-semibold ${
+                                book.status === "Completed" ? "bg-emerald-500/15 text-emerald-400" :
+                                book.status === "Processing" ? "bg-blue-500/15 text-blue-400 animate-pulse" :
+                                "bg-slate-800 text-slate-400"
+                              }`}>
+                                {book.status}
+                              </span>
+
+                              {/* Delete book individual target */}
+                              <button
+                                title={`Delete '${book.title}' from queue`}
+                                onClick={(e) => deleteBook(e, book.id)}
+                                className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-all opacity-80 sm:opacity-0 group-hover/card:opacity-100"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
                           </div>
-                          
-                          {/* Badge */}
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wider font-semibold ${
-                            book.status === "Completed" ? "bg-emerald-500/15 text-emerald-400" :
-                            book.status === "Processing" ? "bg-blue-500/15 text-blue-400 animate-pulse" :
-                            "bg-slate-800 text-slate-400"
-                          }`}>
-                            {book.status}
-                          </span>
-                        </div>
 
                         {/* Description snippet */}
                         <p className="text-[10px] text-slate-500 mt-1.5 leading-normal truncate">
                           {book.description}
                         </p>
+
+                        {/* Mini Sparkline Chart */}
+                        <div className="mt-2.5 h-7 w-full overflow-hidden bg-slate-950/40 rounded-lg border border-slate-800/40 p-0.5">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart 
+                              data={chartData}
+                              margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
+                            >
+                              <defs>
+                                <linearGradient id={`gradient-card-${book.id}`} x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor={book.status === "Completed" ? "#10b981" : "#06b6d4"} stopOpacity={0.25}/>
+                                  <stop offset="95%" stopColor={book.status === "Completed" ? "#10b981" : "#06b6d4"} stopOpacity={0}/>
+                                </linearGradient>
+                              </defs>
+                              <Area 
+                                type="monotone" 
+                                dataKey="completed" 
+                                stroke={book.status === "Completed" ? "#10b981" : "#06b6d4"} 
+                                strokeWidth={1.5}
+                                fillOpacity={1}
+                                fill={`url(#gradient-card-${book.id})`}
+                                dot={{ r: 1.5, strokeWidth: 1, fill: book.status === "Completed" ? "#10b981" : "#06b6d4" }}
+                                activeDot={{ r: 3 }}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
 
                         {/* Progress stats bar */}
                         <div className="mt-3">
@@ -464,7 +676,7 @@ export default function App() {
                         </div>
                       </div>
                     );
-                  })}
+                  }))}
                 </div>
               </div>
 
@@ -860,9 +1072,7 @@ export default function App() {
                         </div>
                       </div>
 
-                    </div>
-
-                    {/* Approval Action controllers block */}
+                    </div>                    {/* Approval Action controllers block */}
                     <div className="pt-4 border-t border-slate-800 mt-3">
                       {activeSession.step === "WAITING_APPROVAL" ? (
                         <div className="space-y-3.5">
@@ -891,11 +1101,29 @@ export default function App() {
                               <span>Approve Run</span>
                             </button>
                           </div>
+
+                          <button
+                            id="abort-pipeline-waiting-btn"
+                            onClick={stopPipeline}
+                            className="w-full mt-2 flex items-center justify-center gap-1.5 py-2 bg-rose-950/20 hover:bg-rose-950/40 border border-rose-900/40 text-rose-300/90 hover:text-rose-200 transition-all font-sans text-xs font-semibold uppercase rounded-lg cursor-pointer"
+                          >
+                            <span>Abort Pipeline Run</span>
+                          </button>
                         </div>
                       ) : (
-                        <div className="flex items-center justify-center gap-2 p-3 bg-slate-950 rounded-xl border border-slate-900 text-center text-slate-500 text-[10px] font-mono uppercase tracking-wider select-none">
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                          <span>Pipeline iterating: {activeSession.step}</span>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-center gap-2 p-3 bg-slate-950 rounded-xl border border-slate-900 text-center text-slate-505 text-[10px] font-mono uppercase tracking-wider select-none">
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                            <span className="text-slate-400">Pipeline iterating: <span className="text-emerald-400">{activeSession.step}</span></span>
+                          </div>
+
+                          <button
+                            id="abort-pipeline-iterating-btn"
+                            onClick={stopPipeline}
+                            className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 text-rose-200 hover:text-rose-100 transition-all font-sans text-xs font-bold uppercase rounded-lg cursor-pointer"
+                          >
+                            <span>Stop / Abort Pipeline</span>
+                          </button>
                         </div>
                       )}
                     </div>
@@ -989,6 +1217,157 @@ export default function App() {
                   className="flex-1 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-sans font-bold text-xs uppercase tracking-wider rounded-lg cursor-pointer transition-all"
                 >
                   Commit to SQLite
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL WINDOW: SETTINGS CONFIGURATIONS */}
+      {showSettingsModal && (
+        <div id="settings-modal-overlay" className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+            <div className="bg-slate-950 border-b border-slate-800 px-5 py-3.5 flex justify-between items-center">
+              <h4 className="font-sans font-bold text-xs uppercase text-slate-200 tracking-widest flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-400 rotate-45" />
+                <span>Workspace Orchestration Settings</span>
+              </h4>
+              <button 
+                id="btn-close-settings"
+                onClick={() => setShowSettingsModal(false)}
+                className="text-slate-400 hover:text-white font-mono text-xs cursor-pointer p-1 uppercase"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={saveSettings} className="p-5 space-y-4">
+              {/* API KEY ROW */}
+              <div>
+                <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">
+                  Google Gemini API Key
+                </label>
+                <div className="relative">
+                  <input
+                    id="input-api-key"
+                    type={showApiKey ? "text" : "password"}
+                    value={customKeyInput}
+                    onChange={(e) => setCustomKeyInput(e.target.value)}
+                    placeholder="Enter custom key (or leave empty for environment default)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-10 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 animate-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-305"
+                  >
+                    {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {settings.hasDefaultKey && !settings.hasCustomKey && (
+                  <p className="text-[10px] text-emerald-500/85 mt-1.5 font-mono">
+                    ✓ Google AI Studio fallback key detected and loaded.
+                  </p>
+                )}
+                {settings.hasCustomKey && (
+                  <p className="text-[10px] text-cyan-400 mt-1.5 flex items-center gap-1 font-mono">
+                    <span>✓ Custom user-provided key is active.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomKeyInput("");
+                      }}
+                      className="text-[10px] text-rose-450 hover:underline uppercase font-bold ml-1 cursor-pointer font-bold"
+                    >
+                      [Clear]
+                    </button>
+                  </p>
+                )}
+              </div>
+
+              {/* MODEL ROW */}
+              <div>
+                <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">
+                  Gemini Model Choice
+                </label>
+                <select
+                  id="select-gemini-model"
+                  value={settings.geminiModel}
+                  onChange={(e) => setSettings({ ...settings, geminiModel: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Default - Efficient)</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Reasoning)</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy Standard)</option>
+                  <option value="gemini-3.5-flash">Gemini 3.5 Flash (Preview)</option>
+                </select>
+              </div>
+
+              {/* SIMULATION SPEED */}
+              <div>
+                <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5 flex justify-between">
+                  <span>Simulation speed multiplier</span>
+                  <span className="text-emerald-400 font-bold">{settings.simulationSpeed}x Pace</span>
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 2, 4, 8].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSettings({ ...settings, simulationSpeed: s })}
+                      className={`py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
+                        settings.simulationSpeed === s
+                          ? "bg-emerald-500/15 border-emerald-500 text-emerald-400 shadow shadow-emerald-500/10"
+                          : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {s === 1 ? "1x (Normal)" : `${s}x`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* AUTO-APPROVE (AUTO AUDIT BYPASS) */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <div className="pr-3">
+                  <label className="block text-[10px] font-mono text-slate-350 uppercase tracking-wider font-bold">
+                    Auto-Approve Pipeline
+                  </label>
+                  <p className="text-[10px] text-slate-500 leading-normal mt-0.5">
+                    By-pass wait state and auto-commit generated reviews.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, autoApprove: !settings.autoApprove })}
+                  className={`w-11 h-6 rounded-full p-1 transition-all duration-300 cursor-pointer ${
+                    settings.autoApprove ? "bg-emerald-500" : "bg-slate-800"
+                  }`}
+                >
+                  <div
+                    className={`w-4 h-4 bg-slate-900 rounded-full transition-all duration-300 transform ${
+                      settings.autoApprove ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(false)}
+                  className="flex-1 py-2 text-slate-400 hover:text-slate-300 border border-slate-800 rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  id="submit-settings-btn"
+                  type="submit"
+                  disabled={isSavingSettings}
+                  className="flex-1 py-2 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-sans font-bold text-xs uppercase tracking-wider rounded-lg cursor-pointer transition-all disabled:opacity-50"
+                >
+                  {isSavingSettings ? "Saving..." : "Commit Settings"}
                 </button>
               </div>
             </form>
