@@ -1,235 +1,233 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Play, Square, FileText, CheckCircle2, Circle, AlertCircle, RefreshCw, Cpu, Activity } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Terminal, Settings, CheckCircle, Clock, AlertTriangle, Play, FileText, Database } from "lucide-react";
 
-interface VerificationStep {
-  id: string;
-  label: string;
-  state: "NOT_STARTED" | "EXECUTING" | "VERIFIED_SUCCESS" | "FAILED";
-  log: string | null;
+interface LogEvent {
+  feature: string;
+  status: string;
+  message: string;
+  payload?: any;
 }
 
-const INITIAL_STEPS: VerificationStep[] = [
-  { id: "PDF_ENGINE", label: "[PDF_ENGINE] Document parsing and metadata extraction", state: "NOT_STARTED", log: null },
-  { id: "GEMINI_CONTEXT_CACHE", label: "[GEMINI_CONTEXT_CACHE] Large-scale token cache initialization", state: "NOT_STARTED", log: null },
-  { id: "SCHOLAR_AGENT", label: "[SCHOLAR_AGENT] Concept mapping and educational synthesis", state: "NOT_STARTED", log: null },
-  { id: "SCRIPTWRITER", label: "[SCRIPTWRITER] Fair-use script adaptation and structuring", state: "NOT_STARTED", log: null },
-  { id: "COPYRIGHT_CHECK", label: "[COPYRIGHT_CHECK] Plagiarism vector and fair-use validation", state: "NOT_STARTED", log: null },
-  { id: "MEDIA_SYNTH_ENGINE", label: "[MEDIA_SYNTH_ENGINE] Voiceover & stock B-roll rendering", state: "NOT_STARTED", log: null },
-  { id: "YOUTUBE_PUBLISHER", label: "[YOUTUBE_OAUTH_&_PUBLISHER] Platform deployment routine", state: "NOT_STARTED", log: null },
-];
-
 export default function App() {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [steps, setSteps] = useState<VerificationStep[]>(INITIAL_STEPS);
-  const [rawTextOutput, setRawTextOutput] = useState<string>("");
-  const [finalScriptOutput, setFinalScriptOutput] = useState<string>("");
+  const [logs, setLogs] = useState<LogEvent[]>([]);
+  const [rawText, setRawText] = useState<string>("");
+  const [finalScript, setFinalScript] = useState<string>("");
+  const [wsStatus, setWsStatus] = useState("DISCONNECTED");
+  const [showSettings, setShowSettings] = useState(false);
+  const [isWaitingApproval, setIsWaitingApproval] = useState(false);
   
-  const processRef = useRef<NodeJS.Timeout | null>(null);
+  const [geminiKey, setGeminiKey] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
+
+  const ws = useRef<WebSocket | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    return () => {
-      if (processRef.current) clearTimeout(processRef.current);
-    };
+    connectWebSocket();
+    fetchSettings();
   }, []);
 
-  const startProcessing = () => {
-    setIsProcessing(true);
-    setSteps(INITIAL_STEPS);
-    setRawTextOutput("");
-    setFinalScriptOutput("");
-    executeStep(0);
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/settings");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.hasGemini) setGeminiKey("••••••••••••••••");
+      if (data.hasOpenAI) setOpenaiKey("••••••••••••••••");
+    } catch (e) {
+      console.warn("Could not fetch settings. Python backend may be offline.");
+    }
   };
 
-  const executeStep = (stepIndex: number) => {
-    if (stepIndex >= INITIAL_STEPS.length) {
-      setIsProcessing(false);
-      return;
+  const saveSettings = async () => {
+    try {
+      await fetch("http://localhost:8000/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          geminiKey: geminiKey === "••••••••••••••••" ? null : geminiKey,
+          openaiKey: openaiKey === "••••••••••••••••" ? null : openaiKey
+        })
+      });
+      setShowSettings(false);
+    } catch (e) {
+      console.warn("Could not save settings. Python backend may be offline.");
+      setShowSettings(false);
     }
+  };
 
-    setSteps(prev => prev.map((s, idx) => 
-      idx === stepIndex ? { ...s, state: "EXECUTING" } : s
-    ));
-
-    const stepId = INITIAL_STEPS[stepIndex].id;
-
-    setTimeout(() => {
-      let nextLog = "";
-      
-      switch (stepId) {
-        case "PDF_ENGINE":
-          nextLog = "VERIFIED: Read 342 pages. Computed boundaries. Raw buffer stream captured (23,401 bytes).";
-          setRawTextOutput("> INITIATING PDF BYTE STREAM EXTRACT...\n\nChapter 1\nThe fundamental architecture of AI requires a structured systemic approach to cognitive loading. In this section we explore standard mechanisms of retrieval augmented generation.\n\n[PAGE END]\n\nChapter 2\nBuilding robust telemetry ensures deep visibility into orchestrator pipelines.");
-          break;
-        case "GEMINI_CONTEXT_CACHE":
-          nextLog = "VERIFIED: Cache ID [cch-9a8x-001] active. Sent 154,203 tokens. TTL set to 1800s.";
-          break;
-        case "SCHOLAR_AGENT":
-          nextLog = "VERIFIED: Telemetry Latency: 1.4s. Thesis construct identified perfectly.";
-          break;
-        case "SCRIPTWRITER":
-          nextLog = "VERIFIED: Response generated in 2.1s. Hooks optimized for video engagement.";
-          setFinalScriptOutput("Welcome back to the Deep Dive.\n\nToday we are exploring the fundamental architecture of AI cognitive systems. Let's break down Chapter 1.\n\nAt its core, a system is only as strong as its context window and retrieval systems.");
-          break;
-        case "COPYRIGHT_CHECK":
-          nextLog = "VERIFIED: Plagiarism delta: 1.2%. Content strictly within transformative fair-use guidelines.";
-          break;
-        case "MEDIA_SYNTH_ENGINE":
-          nextLog = "VERIFIED: Audio track [vo_001.mp3] linked. Stock video path [/assets/broll_12.mp4] cached. Render sequence locked.";
-          break;
-        case "YOUTUBE_PUBLISHER":
-          nextLog = "VERIFIED: Auth tokens valid. Appended to playlist 'AI Architecture'. URL mapping complete: https://youtu.be/xxx_yyy_zzz.";
-          break;
+  const connectWebSocket = () => {
+    ws.current = new WebSocket("ws://localhost:8000/ws");
+    ws.current.onopen = () => setWsStatus("CONNECTED");
+    ws.current.onclose = () => {
+      setWsStatus("DISCONNECTED");
+      setTimeout(connectWebSocket, 3000);
+    };
+    ws.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === "TELEMETRY") {
+        setLogs(prev => [...prev, data]);
+        if (data.payload?.rawText) setRawText(data.payload.rawText);
+        if (data.payload?.script) setFinalScript(data.payload.script);
+        if (data.feature === "HUMAN_GATE" && data.status === "WAITING") setIsWaitingApproval(true);
+        if (data.feature === "HUMAN_GATE" && data.status === "VERIFIED SUCCESS") setIsWaitingApproval(false);
       }
-
-      setSteps(prev => prev.map((s, idx) => 
-        idx === stepIndex ? { ...s, state: "VERIFIED_SUCCESS", log: nextLog } : s
-      ));
-
-      processRef.current = setTimeout(() => {
-        executeStep(stepIndex + 1);
-      }, 1500);
-
-    }, 2000);
+    };
   };
 
-  const stopProcessing = () => {
-    setIsProcessing(false);
-    if (processRef.current) {
-      clearTimeout(processRef.current);
+  const startPipeline = async () => {
+    setLogs([]); setRawText(""); setFinalScript(""); setIsWaitingApproval(false);
+    try {
+      const res = await fetch("http://localhost:8000/api/flow/run", { method: "POST" });
+      const data = await res.json();
+      if (data.error) alert(data.error);
+    } catch (e) {
+      alert("Failed to start pipeline. Is the Python backend running on port 8000?");
     }
-    setSteps(prev => prev.map(s => 
-      s.state === "EXECUTING" ? { ...s, state: "FAILED", log: "ABORTED BY USER" } : s
-    ));
+  };
+
+  const approvePipeline = async () => {
+    try {
+      await fetch("http://localhost:8000/api/flow/approve", { method: "POST" });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    if (status === "EXECUTING") return "text-amber-400 animate-pulse";
+    if (status === "VERIFIED SUCCESS") return "text-emerald-400 font-bold";
+    if (status === "FAILED") return "text-rose-500 font-bold";
+    if (status === "WAITING") return "text-cyan-400 animate-pulse";
+    return "text-slate-500";
   };
 
   return (
-    <div className="h-screen w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      <header className="shrink-0 h-16 border-b border-slate-800 bg-slate-950 flex items-center justify-between px-6 z-10 relative shadow-sm">
+    <div className="h-screen w-screen bg-[#070a13] text-slate-100 flex flex-col overflow-hidden font-sans">
+      
+      {/* HEADER */}
+      <header className="h-14 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-6 shrink-0 z-10 relative">
         <div className="flex items-center gap-3">
-          <Cpu className="w-5 h-5 text-emerald-400" />
-          <h1 className="font-bold text-sm tracking-widest uppercase text-slate-200">
-            Intelligent Media Pipeline
-          </h1>
-          <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-400 border border-slate-700">
-            SYSTEM_UPTIME: 99.9%
+          <Database className="w-5 h-5 text-emerald-500" />
+          <h1 className="font-bold text-sm uppercase tracking-widest text-slate-200">The Open Syllabus Engine</h1>
+          <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${wsStatus === 'CONNECTED' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+            Backend: {wsStatus}
           </span>
         </div>
-        
         <div className="flex items-center gap-4">
-          {!isProcessing ? (
-             <button 
-                onClick={startProcessing}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded font-bold uppercase tracking-wider text-xs transition-colors"
-             >
-                <Play className="w-4 h-4" />
-                Initialize Pipeline
-             </button>
-          ) : (
-             <button 
-                onClick={stopProcessing}
-                className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-400 text-white rounded font-bold uppercase tracking-wider text-xs transition-colors"
-             >
-                <Square className="w-4 h-4 fill-current flex-shrink-0" />
-                Halt Execution
-             </button>
-          )}
+          <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-emerald-400 transition-colors uppercase tracking-wider">
+            <Settings className="w-4 h-4" /> API Settings
+          </button>
+          <button onClick={startPipeline} className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold uppercase rounded transition-colors shadow-lg shadow-emerald-500/20">
+            <Play className="w-4 h-4" /> Run Folder Scan
+          </button>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className="w-1/2 flex flex-col border-r border-slate-800 bg-[#0b0e14]">
-          <div className="shrink-0 h-10 border-b border-slate-800 flex items-center px-4 bg-slate-900/50">
-            <FileText className="w-4 h-4 text-emerald-500 mr-2" />
-            <h2 className="text-[11px] font-bold text-slate-300 uppercase tracking-widest">
-              Script Inspector Window
-            </h2>
+      {/* SPLIT SCREEN WORKSPACE */}
+      <main className="flex-1 flex overflow-hidden">
+        
+        {/* LEFT PANE: Raw Data & Script Inspector */}
+        <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-900/40 min-w-0">
+          <div className="h-8 bg-slate-950 flex items-center px-4 border-b border-slate-800 shrink-0">
+            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">Left Pane: Payload Inspector</span>
           </div>
           
-          <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto">
-            <div className="flex-1 flex flex-col min-h-0">
-              <label className="text-[10px] text-slate-500 font-mono tracking-wider mb-2 uppercase">
-                // RAW_PDF_BUFFER_STREAM
-              </label>
-              <div className="flex-1 bg-slate-950 border border-slate-800 rounded p-4 font-mono text-xs text-slate-400 overflow-y-auto whitespace-pre-wrap leading-relaxed shadow-inner">
-                {rawTextOutput || "Awaiting generic document extraction sequence..."}
+          <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden min-h-0">
+            {/* Raw Text Window */}
+            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden min-h-0">
+              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                <FileText className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase">1. Raw PDF Extraction (PyMuPDF)</span>
+              </div>
+              <div className="flex-1 p-3 overflow-y-auto text-[11px] font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/30">
+                {rawText || "Waiting for PDF scan engine..."}
               </div>
             </div>
-            
-            <div className="flex-1 flex flex-col min-h-0">
-              <label className="text-[10px] text-slate-500 font-mono tracking-wider mb-2 uppercase border-t border-slate-800/50 pt-4">
-                 // COMPILED_FINAL_SCRIPT_OUTPUT
-              </label>
-              <div className="flex-1 bg-slate-900/60 border border-emerald-500/20 rounded p-4 font-serif text-sm text-slate-200 overflow-y-auto whitespace-pre-wrap leading-loose shadow-inner">
-                {finalScriptOutput || "Awaiting semantic orchestration output..."}
+
+            {/* Final Script Window */}
+            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden relative min-h-0">
+              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase">2. Generated Output Script (CrewAI)</span>
               </div>
+              <div className="flex-1 p-3 overflow-y-auto text-xs font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/30">
+                {finalScript || "Waiting for Scholar & Scriptwriter agents..."}
+              </div>
+
+              {/* HUMAN GATEWAY OVERLAY */}
+              {isWaitingApproval && (
+                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center animate-in fade-in">
+                  <AlertTriangle className="w-10 h-10 text-amber-400 mb-3 animate-pulse" />
+                  <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-2">Human Approval Required</h3>
+                  <p className="text-xs text-slate-400 mb-6 max-w-md">The script has been generated and copyright-verified. Review the text above. Do you wish to proceed to media rendering and YouTube compilation?</p>
+                  <button onClick={approvePipeline} className="px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 transition-all">
+                    Proceed to Media Synthesis
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="w-1/2 flex flex-col bg-[#070a13]">
-           <div className="shrink-0 h-10 border-b border-slate-800 flex items-center px-4 bg-slate-900/50 justify-between">
-              <div className="flex items-center gap-2">
-                 <Activity className="w-4 h-4 text-emerald-500" />
-                 <h2 className="text-[11px] font-bold text-slate-300 uppercase tracking-widest">
-                    Feature Verification Matrix
-                 </h2>
+        {/* RIGHT PANE: Feature Matrix & Telemetry */}
+        <div className="w-1/2 flex flex-col bg-slate-900/20 min-w-0">
+          <div className="h-8 bg-slate-950 flex items-center px-4 border-b border-slate-800 shrink-0">
+            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">Right Pane: Diagnostic Telemetry</span>
+          </div>
+
+          <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden min-h-0">
+            {/* Live Log Stream */}
+            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden min-h-0">
+              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase">Execution Console</span>
               </div>
-              {isProcessing && (
-                 <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-emerald-400">
-                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-                    SYSTEM ACTIVE
-                 </span>
-              )}
-           </div>
-
-           <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {steps.map((step) => {
-                 let Icon = Circle;
-                 let borderClass = "border-slate-800";
-                 let bgClass = "bg-slate-950/50";
-                 let textClass = "text-slate-400";
-                 
-                 if (step.state === "EXECUTING") {
-                    Icon = RefreshCw;
-                    borderClass = "border-amber-500/50";
-                    bgClass = "bg-amber-500/5";
-                    textClass = "text-amber-500";
-                 } else if (step.state === "VERIFIED_SUCCESS") {
-                    Icon = CheckCircle2;
-                    borderClass = "border-emerald-500/30";
-                    bgClass = "bg-emerald-500/5";
-                    textClass = "text-emerald-400";
-                 } else if (step.state === "FAILED") {
-                    Icon = AlertCircle;
-                    borderClass = "border-rose-500/50";
-                    bgClass = "bg-rose-500/5";
-                    textClass = "text-rose-400";
-                 }
-
-                 return (
-                    <div key={step.id} className={`p-4 rounded-lg border flex flex-col gap-3 transition-colors duration-300 ${borderClass} ${bgClass}`}>
-                       <div className="flex items-center justify-between">
-                          <h3 className="font-mono text-xs font-bold tracking-widest uppercase text-slate-200">
-                             {step.label}
-                          </h3>
-                          <div className={`flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase font-bold ${textClass}`}>
-                             {step.state === "EXECUTING" && <Icon className="w-3.5 h-3.5 animate-spin" />}
-                             {step.state !== "EXECUTING" && <Icon className="w-3.5 h-3.5" />}
-                             {step.state.replace("_", " ")}
-                          </div>
-                       </div>
-                       
-                       <div className="bg-black/40 rounded p-2.5 min-h-[40px] flex items-center border border-slate-800/80">
-                          <code className={`font-mono text-[10px] ${step.log ? "text-emerald-300" : "text-slate-600"} break-all`}>
-                             {step.log || "> SYSTEM AWAITING INSTRUCTIONS..."}
-                          </code>
-                       </div>
+              <div className="flex-1 p-3 overflow-y-auto text-[11px] font-mono space-y-2">
+                {logs.length === 0 ? (
+                  <span className="text-slate-600">System idle. Ready to parse PDF.</span>
+                ) : (
+                  logs.map((log, i) => (
+                    <div key={i} className="flex flex-col border-l-2 border-slate-800 pl-2 py-0.5">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-cyan-400 font-bold">[{log.feature}]</span>
+                        <span className={`font-bold uppercase ${getStatusColor(log.status)}`}>[{log.status}]</span>
+                      </div>
+                      <span className="text-slate-300 break-words">{log.message}</span>
                     </div>
-                 );
-              })}
-           </div>
+                  ))
+                )}
+                <div ref={logsEndRef} />
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
+
+      {/* SETTINGS MODAL */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 w-[400px]">
+            <h2 className="text-sm font-bold uppercase tracking-widest mb-4 text-emerald-400">API Configurations</h2>
+            
+            <label className="block text-[10px] text-slate-400 uppercase mb-1">Google Gemini Key</label>
+            <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded px-3 py-2 mb-4 text-xs focus:border-emerald-500 outline-none" />
+
+            <label className="block text-[10px] text-slate-400 uppercase mb-1">OpenAI Key (Optional)</label>
+            <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded px-3 py-2 mb-6 text-xs focus:border-emerald-500 outline-none" />
+
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-slate-200">CANCEL</button>
+              <button onClick={saveSettings} className="px-4 py-2 bg-emerald-500 text-slate-950 text-xs font-bold rounded">SAVE KEYS</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

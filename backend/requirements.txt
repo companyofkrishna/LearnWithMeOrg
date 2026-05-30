@@ -1,0 +1,11 @@
+fastapi==0.109.2
+uvicorn==0.27.1
+crewai==0.28.8
+langchain-google-genai==1.0.3
+langchain-openai==0.1.3
+pymupdf==1.24.1
+moviepy==1.0.3
+google-api-python-client==2.126.0
+google-auth-oauthlib==1.2.0
+python-dotenv==1.0.1
+websockets==12.0
