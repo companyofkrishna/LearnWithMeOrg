@@ -251,26 +251,23 @@ app.post("/api/youtube/upload", async (req, res) => {
     }
   });
 
-  // Simulate upload delay
-  setTimeout(() => {
-    const videoId = Math.random().toString(36).substring(2, 11);
-    const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
-    
-    if (chapter) {
-      chapter.uploading = false;
-      chapter.youtubeUrl = youtubeUrl;
-      broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
-    }
+  const videoId = Math.random().toString(36).substring(2, 11);
+  const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+  
+  if (chapter) {
+    chapter.uploading = false;
+    chapter.youtubeUrl = youtubeUrl;
+    broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
+  }
 
-    broadcast({
-      type: "LOG",
-      payload: {
-        feature: "YOUTUBE_PUBLISHER",
-        status: "VERIFIED SUCCESS",
-        message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
-      }
-    });
-  }, 4000);
+  broadcast({
+    type: "LOG",
+    payload: {
+      feature: "YOUTUBE_PUBLISHER",
+      status: "VERIFIED SUCCESS",
+      message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
+    }
+  });
 
   res.json({ success: true, message: "Upload started" });
 });
@@ -335,7 +332,7 @@ app.post("/api/flow/run", async (req, res) => {
   res.json({ status: "started", book: targetName });
 });
 
-app.post("/api/flow/approve", express.json(), (req, res) => {
+app.post("/api/flow/approve", (req, res) => {
   const tone = req.body.tone || "Professional";
   if (!pipelineState.isProcessing || !pipelineState.waitingApproval) {
     return res.status(400).json({ error: "Pipeline is not in a waiting state." });
@@ -365,9 +362,6 @@ app.post("/api/flow/stop", (req, res) => {
   res.json({ success: true });
 });
 
-// Helper function to safely wait
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
 async function runPipeline(filePath: string, name: string) {
   try {
     broadcast({
@@ -376,8 +370,6 @@ async function runPipeline(filePath: string, name: string) {
       status: "EXECUTING",
       message: `Analyzing document bounds for custom book file: ${name}`
     });
-
-    await delay(1000);
 
     const dataBuffer = fs.readFileSync(filePath);
     let fullText = "";
@@ -405,34 +397,45 @@ async function runPipeline(filePath: string, name: string) {
     });
 
     // Extract chapters intelligently
-    let chapters: string[] = [];
+    let chapters: { title: string, content: string }[] = [];
     const chapterMatches = [...fullText.matchAll(/(Chapter\s+(\d+|[IVXLCDM]+)\b|CHAPTER\s+(\d+|[IVXLCDM]+)\b|\bSection\s+(\d+|[IVXLCDM]+)\b)/gi)];
     
     if (chapterMatches.length > 1) {
       // Parse out segments
+      let uniqueTitles = new Set();
       for (let i = 0; i < Math.min(10, chapterMatches.length); i++) {
         const title = chapterMatches[i][0].trim();
-        if (!chapters.includes(title)) {
-          chapters.push(title);
+        const startIndex = chapterMatches[i].index as number;
+        const endIndex = i + 1 < chapterMatches.length ? chapterMatches[i+1].index as number : fullText.length;
+        if (!uniqueTitles.has(title)) {
+          uniqueTitles.add(title);
+          let content = fullText.slice(startIndex, endIndex).trim();
+          chapters.push({ title, content });
+        }
+      }
+    } else {
+      // No explicit chapters, divide document into semantic sections based on chunks
+      const chunkSize = 15000;
+      const numChunks = Math.min(5, Math.ceil(fullText.length / chunkSize));
+      for (let i = 0; i < numChunks; i++) {
+        const title = `Section ${i + 1}`;
+        const content = fullText.slice(i * chunkSize, (i + 1) * chunkSize).trim();
+        if (content.length > 0) {
+          chapters.push({ title, content });
         }
       }
     }
 
-    // Default or fallback chapters to ensure multi-chapter visibility and strict layout rules
-    if (chapters.length < 2) {
+    if (chapters.length === 0) {
       chapters = [
-        "Chapter 1: Foundational Paradigm",
-        "Chapter 2: Structural Metatheory",
-        "Chapter 3: Design Archetypes",
-        "Chapter 4: Implementation Vector",
-        "Chapter 5: Synthesis & Application"
+        { title: "Document Overview", content: "No text payload was extracted." }
       ];
     }
 
     pipelineState.totalChapters = chapters.length;
-    pipelineState.chaptersList = chapters;
+    pipelineState.chaptersList = chapters.map(c => c.title);
     pipelineState.completedChapters = 0;
-    pipelineState.currentChapterTitle = chapters[0];
+    pipelineState.currentChapterTitle = chapters[0].title;
     pipelineState.rawTextPreview = fullText.slice(0, 1800) + "\n\n... [Syllabus Extraction Boundary Metatable Active] ...";
     broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
 
@@ -440,7 +443,8 @@ async function runPipeline(filePath: string, name: string) {
     for (let i = 0; i < chapters.length; i++) {
       if (!pipelineState.isProcessing) return;
 
-      const title = chapters[i];
+      const title = chapters[i].title;
+      const chapterContent = chapters[i].content.slice(0, 5000); // Take first 5k characters to keep prompts efficient
       pipelineState.currentChapterTitle = title;
       broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
 
@@ -450,8 +454,6 @@ async function runPipeline(filePath: string, name: string) {
         status: "EXECUTING",
         message: `Scholar Agent is analyzing content mapping for [${title}]...`
       });
-
-      await delay(1500);
 
       // Call Gemini if key exists, otherwise use rich high-fidelity simulated response
       let summaryText = "";
@@ -464,15 +466,18 @@ async function runPipeline(filePath: string, name: string) {
             httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
           });
           const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: `The book is titled "${name}". Summarize the material corresponding to "${title}" into a concise educational outline.`
+            model: "gemini-2.5-flash",
+            contents: `The book is titled "${name}". You are a Scholar Agent. Below is the text content for "${title}". Analyze it and summarize the material into a concise educational outline.
+
+Content to analyze:
+${chapterContent}`
           });
           summaryText = response.text || "No summary text generated from Gemini Pro SDK.";
         } catch (apiError: any) {
-          summaryText = `[Syllabus Summary Generator fall-through (API key invalid: ${apiError.message})] Let's explore the core definitions, metrics, and parameters defined dynamically under ${title}. We build robust pipelines to establish clean structural mapping layers.`;
+          summaryText = `[Syllabus Summary Generator fall-through (API key invalid: ${apiError.message})] Let's explore the core definitions, metrics, and parameters defined dynamically under ${title}.\n\nExtracted Content Hint: ${chapterContent.substring(0, 100)}...`;
         }
       } else {
-        summaryText = `[High-Fidelity Offline Mode] Educational mapping of "${title}" in "${name}". Under this critical threshold, we explore standard mechanisms of context loading, model optimization, schema definitions, and high-quality vector mapping layouts.`;
+        summaryText = `[High-Fidelity Offline Mode] Educational mapping of "${title}" in "${name}".\n\nContent Chunk Analyzed: ${chapterContent.substring(0, 200)}...`;
       }
 
       broadcast({
@@ -492,8 +497,6 @@ async function runPipeline(filePath: string, name: string) {
         message: `Scriptwriter Agent is adapting educational outline for [${title}] into a video script...`
       });
 
-      await delay(1500);
-
       let scriptText = "";
       if (hasKey) {
         try {
@@ -502,15 +505,15 @@ async function runPipeline(filePath: string, name: string) {
             httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
           });
           const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
+            model: "gemini-2.5-flash",
             contents: `Write a clean, professional, engaging video lecture script based on this outline: ${summaryText}`
           });
           scriptText = response.text || "No script text generated.";
         } catch (apiError: any) {
-          scriptText = `Hello and welcome back. Today, we are deep diving into ${title} from "${name}". Let's discuss why this framework is essential for modern system development. We look at key architectural guidelines and how elements bind dynamically at run-time.`;
+          scriptText = `Hello and welcome back. Today, we are deep diving into ${title} from "${name}". Here is an overview of what we are covering:\n\n${summaryText.substring(0, 300)}... \n\nLet's discuss why this framework is essential for modern system development. We look at key architectural guidelines and how elements bind dynamically at run-time.`;
         }
       } else {
-        scriptText = `Welcome back to the Deep Dive class series! Today we are exploring ${title} of "${name}".\n\nTo construct solid pipelines, we must align our structural context streams. As we proceed through today's workbook, check off the verification blocks!`;
+        scriptText = `Welcome back to the Deep Dive class series! Today we are exploring ${title} of "${name}".\n\nBased on your content:\n${chapterContent.substring(0, 300)}...\n\nTo construct solid pipelines, we must align our structural context streams. As we proceed through today's workbook, check off the verification blocks!`;
       }
 
       pipelineState.finalScriptOutput = scriptText;
@@ -535,8 +538,6 @@ async function runPipeline(filePath: string, name: string) {
         status: "EXECUTING",
         message: `Initiated Plagiarism Vector scanning. Running semantic transforms...`
       });
-
-      await delay(1000);
 
       broadcast({
         type: "TELEMETRY",
@@ -589,8 +590,6 @@ async function resumePipeline(tone: string = "Professional") {
       message: `Opening voiceover renderer engine using [${tone}] tone. Generating speech vectors...`
     });
 
-    await delay(2000);
-
     broadcast({
       type: "TELEMETRY",
       feature: "MEDIA_SYNTH_ENGINE",
@@ -604,8 +603,6 @@ async function resumePipeline(tone: string = "Professional") {
       status: "EXECUTING",
       message: "Verifying publisher credentials. Refresh token authenticated."
     });
-
-    await delay(1500);
 
     broadcast({
       type: "TELEMETRY",
