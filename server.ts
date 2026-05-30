@@ -2,6 +2,7 @@ import express from "express";
 import http from "http";
 import path from "path";
 import fs from "fs";
+import https from "https";
 import { WebSocketServer, WebSocket } from "ws";
 import multer from "multer";
 // @ts-ignore
@@ -20,6 +21,29 @@ app.use(express.json());
 const BOOKS_DIR = path.join(process.cwd(), "books_input");
 if (!fs.existsSync(BOOKS_DIR)) {
   fs.mkdirSync(BOOKS_DIR, { recursive: true });
+}
+
+// Prepare videos storage directory
+const STORAGE_DIR = path.join(process.cwd(), "storage");
+const VIDEOS_DIR = path.join(STORAGE_DIR, "videos");
+if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
+if (!fs.existsSync(VIDEOS_DIR)) fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+
+// Download a default sample video if it doesn't exist
+const SAMPLE_VIDEO_PATH = path.join(VIDEOS_DIR, "sample_template.mp4");
+if (!fs.existsSync(SAMPLE_VIDEO_PATH)) {
+  console.log("Downloading sample video template for local hosting...");
+  https.get("https://www.w3schools.com/html/mov_bbb.mp4", (res) => {
+    if (res.statusCode === 200) {
+      const fileStream = fs.createWriteStream(SAMPLE_VIDEO_PATH);
+      res.pipe(fileStream);
+      fileStream.on('finish', () => {
+         console.log("Sample video downloaded successfully to", SAMPLE_VIDEO_PATH);
+      });
+    }
+  }).on('error', err => {
+    console.error("Error downloading sample video:", err.message);
+  });
 }
 
 // Multer photo/document storage configuration
@@ -171,17 +195,18 @@ app.get("/api/video", (req, res) => {
   const { chapter, book, index } = req.query;
   const idx = parseInt(String(index || "0"), 10);
   
-  // High quality loopable educational-themed / device-themed video stream elements from Google's standard open cast sample pool
-  const videoUrls = [
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4"
-  ];
-  
-  const targetUrl = videoUrls[idx % videoUrls.length];
-  res.redirect(targetUrl);
+  const fileName = `video_${encodeURIComponent(String(book || "default"))}_${encodeURIComponent(String(chapter || "ch"))}_${idx}.mp4`;
+  const filePath = path.join(VIDEOS_DIR, fileName);
+
+  if (!fs.existsSync(filePath)) {
+    if (fs.existsSync(SAMPLE_VIDEO_PATH)) {
+      fs.copyFileSync(SAMPLE_VIDEO_PATH, filePath);
+    } else {
+      return res.redirect("https://www.w3schools.com/html/mov_bbb.mp4");
+    }
+  }
+
+  res.sendFile(filePath);
 });
 
 // Real-time Pipeline Execution Thread (Express Async Flow)

@@ -366,8 +366,8 @@ export default function App() {
         <div className="w-[380px] shrink-0 border-r border-slate-800 bg-[#0b101f] flex flex-col overflow-y-auto p-5 gap-6 select-text">
           
           {/* SECURE AUTO-SAVE API KEYS */}
-          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm relative overflow-hidden">
-            <div className="flex items-center justify-between mb-3 shrink-0">
+          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm flex flex-col gap-3 relative overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2 shrink-0">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-emerald-400" />
                 <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200">API Credentials</h2>
@@ -380,42 +380,38 @@ export default function App() {
                 </span>
               )}
               {saveStatus === "saved" && (
-                <span className="text-[9px] font-mono font-bold text-emerald-400 uppercase">
+                <span className="text-[9px] font-mono font-bold text-emerald-400 uppercase pt-0.5">
                   ✓ Saved
                 </span>
               )}
             </div>
 
-            <p className="text-[10px] text-slate-400 mb-3 leading-relaxed">
+            <p className="text-[10px] text-slate-400 leading-relaxed m-0 text-balance">
               API Keys are automatically captured and saved directly on standard inputs. No manual clicks required.
             </p>
 
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">
-                  Google Gemini Developer Key
-                </label>
-                <input 
-                  type="password" 
-                  value={geminiKey}
-                  placeholder="Paste Gemini Key here..."
-                  onChange={(e) => handleGeminiChange(e.target.value)}
-                  className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors selection:bg-emerald-500/25"
-                />
-              </div>
+            <div className="grid grid-cols-[145px_1fr] gap-x-2 gap-y-3 items-center">
+              <label className="text-[9.5px] font-mono uppercase tracking-wider text-slate-400">
+                Google Gemini Key
+              </label>
+              <input 
+                type="password" 
+                value={geminiKey}
+                placeholder="Paste Gemini Key here..."
+                onChange={(e) => handleGeminiChange(e.target.value)}
+                className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors selection:bg-emerald-500/25"
+              />
 
-              <div>
-                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">
-                  OpenAI Companion Key (Optional)
-                </label>
-                <input 
-                  type="password" 
-                  value={openaiKey}
-                  placeholder="Paste OpenAI Key if active..."
-                  onChange={(e) => handleOpenAiChange(e.target.value)}
-                  className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors"
-                />
-              </div>
+              <label className="text-[9.5px] font-mono uppercase tracking-wider text-slate-400">
+                OpenAI Key (Opt)
+              </label>
+              <input 
+                type="password" 
+                value={openaiKey}
+                placeholder="Paste OpenAI Key if active..."
+                onChange={(e) => handleOpenAiChange(e.target.value)}
+                className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors"
+              />
             </div>
           </div>
 
@@ -553,150 +549,114 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="flex-[2] flex overflow-hidden border-b border-slate-800">
+          <div className="flex-1 flex overflow-hidden">
             
-              {/* Split Top Panel: Raw Extracted Book Stream */}
-              <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
-                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                  <FileCheck className="w-4 h-4 text-slate-400" />
-                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                    1. Raw Book Segment Cache (PyMuPDF)
-                  </span>
-                </div>
-                <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                  {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
-                </div>
+            {/* Split Left Panel: Raw Extracted Book Stream */}
+            <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
+              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                <FileCheck className="w-4 h-4 text-slate-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                  1. Raw Book Segment Cache (PyMuPDF)
+                </span>
               </div>
-
-              {/* Split Bottom Panel: Synthesized Text Drafts */}
-              <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
-                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-2">
-                    <Compass className="w-4 h-4 text-emerald-400" />
-                    <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                      2. Generated Lesson Script & Video
-                    </span>
-                  </div>
-                  {pipeline.videoUrl && (
-                    <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
-                      ● Video Compiled
-                    </span>
-                  )}
-                </div>
-
-                {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
-                {pipeline.videoUrl && (
-                  <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
-                    <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative group shadow-lg shadow-black/40">
-                      <video 
-                        key={pipeline.videoUrl}
-                        controls 
-                        autoPlay={pipeline.completedChapters > 0}
-                        className="w-full h-full object-contain"
-                        referrerPolicy="no-referrer"
-                      >
-                        <source src={pipeline.videoUrl} type="video/mp4" />
-                        Your browser does not support the video tag.
-                      </video>
-                      {/* Minimalist Watermark overlay */}
-                      <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
-                        Media Render Active • 1080p
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-center mt-2 px-1">
-                      <span className="text-[10px] font-mono text-slate-400">
-                        Synthesized Stream Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
-                      </span>
-                      <div className="flex items-center gap-3 cursor-pointer">
-                        <a 
-                          href={pipeline.videoUrl} 
-                          download={`lecture_export.mp4`}
-                          className="text-[10px] text-cyan-400 hover:text-cyan-300 hover:underline font-mono"
-                        >
-                          Download Video ↓
-                        </a>
-                        <a 
-                          href={pipeline.videoUrl} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          className="text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline font-mono"
-                        >
-                          Open Video ↗
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                  {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
-                </div>
-
-                {/* DUAL GATE APPROVAL THRESHOLD */}
-                {pipeline.waitingApproval && (
-                  <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
-                    <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
-                      <AlertTriangle className="w-7 h-7 animate-pulse" />
-                    </div>
-                    <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
-                      Human Authorization Threshold
-                    </h3>
-                    <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
-                      The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
-                    </p>
-                    
-                    <div className="flex gap-4">
-                      <button 
-                        onClick={stopPipeline} 
-                        className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
-                      >
-                        Dismount
-                      </button>
-                      <button 
-                        onClick={approvePipeline} 
-                        className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
-                      >
-                        Sign off script <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
+              <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
               </div>
             </div>
 
-            {/* Analytics Bottom Panel */}
-            <div className="flex-[1] bg-[#070b13] p-4 flex flex-col min-h-[180px] border-t border-slate-800">
-               <div className="flex items-center gap-2 mb-3 shrink-0">
-                  <Activity className="w-4 h-4 text-cyan-400" />
-                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">Pipeline Telemetry Analytics</span>
-               </div>
-               <div className="flex-1 w-full min-h-0">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={chartData} margin={{ top: 5, right: 20, left: -20, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="colorChapters" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                        </linearGradient>
-                        <linearGradient id="colorDuration" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                      <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={8} />
-                      <YAxis yAxisId="left" stroke="#475569" fontSize={10} />
-                      <YAxis yAxisId="right" orientation="right" stroke="#475569" fontSize={10} />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', fontSize: '12px' }}
-                        itemStyle={{ color: '#cbd5e1' }}
-                      />
-                      <Area yAxisId="left" type="monotone" name="Chapters Processed" dataKey="chapters" stroke="#10b981" fillOpacity={1} fill="url(#colorChapters)" />
-                      <Area yAxisId="right" type="monotone" name="Video Duration (m)" dataKey="duration" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorDuration)" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-               </div>
+            {/* Split Right Panel: Synthesized Text Drafts */}
+            <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
+              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Compass className="w-4 h-4 text-emerald-400" />
+                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                    2. Generated Lesson Script & Video
+                  </span>
+                </div>
+                {pipeline.videoUrl && (
+                  <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
+                    ● Video Compiled
+                  </span>
+                )}
+              </div>
+
+              {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
+              {pipeline.videoUrl && (
+                <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
+                  <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video max-h-[35vh] w-full flex items-center justify-center relative group shadow-lg shadow-black/40">
+                    <video 
+                      key={pipeline.videoUrl}
+                      controls 
+                      autoPlay={pipeline.completedChapters > 0}
+                      className="w-full h-full object-contain"
+                      referrerPolicy="no-referrer"
+                    >
+                      <source src={pipeline.videoUrl} type="video/mp4" />
+                      Your browser does not support the video tag.
+                    </video>
+                    {/* Minimalist Watermark overlay */}
+                    <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
+                      Media Render Active • 1080p
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center mt-3 pt-1">
+                    <span className="text-[10px] font-mono text-slate-400 truncate pr-3" title={pipeline.currentChapterTitle || "Chapter Overview"}>
+                      Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
+                    </span>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <a 
+                        href={pipeline.videoUrl} 
+                        download={`lecture_export.mp4`}
+                        className="text-[10.5px] font-bold text-emerald-400 hover:text-emerald-300 hover:underline uppercase tracking-wide flex items-center gap-1"
+                      >
+                        Download
+                      </a>
+                      <a 
+                        href={pipeline.videoUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-[10.5px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline uppercase tracking-wide flex items-center gap-1"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
+              </div>
+
+              {/* DUAL GATE APPROVAL THRESHOLD */}
+              {pipeline.waitingApproval && (
+                <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+                  <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+                    <AlertTriangle className="w-7 h-7 animate-pulse" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
+                    Human Authorization Threshold
+                  </h3>
+                  <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
+                    The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
+                  </p>
+                  
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={stopPipeline} 
+                      className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
+                    >
+                      Dismount
+                    </button>
+                    <button 
+                      onClick={approvePipeline} 
+                      className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
+                    >
+                      Sign off script <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
