@@ -15,15 +15,62 @@ import {
   BookOpen,
   StopCircle,
   HelpCircle,
-  Activity
+  Activity,
+  Download,
+  Youtube,
+  UploadCloud,
+  CheckCircle2
 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+
+const KEY_TERMS: Record<string, string> = {
+  "Algorithm": "A logical, step-by-step procedure for solving a mathematical problem or completing a computer process.",
+  "Neural Network": "A machine learning model inspired by the structure of the human brain, designed to recognize patterns and make intelligent categorizations.",
+  "Machine Learning": "A branch of artificial intelligence where systems learn from data to identify patterns and make decisions with minimal human intervention.",
+  "API": "Application Programming Interface: a set of functions allowing applications to access data and interact with external systems securely.",
+  "Syntax": "The set of rules that defines the structure and combinations of symbols in a programming language.",
+  "PyMuPDF": "A high-performance Python library (fitz) used for extracting text, metadata, and images from PDF documents.",
+  "FastAPI": "A modern, high-performance web framework for Python, based on standard Python type hints.",
+  "B-roll": "Supplemental video footage intercut with the primary shot to provide context, visual interest, or hide cuts.",
+  "Voiceover": "An unseen narrator's voice, reading from a script over visual media to provide explanatory dialogue.",
+  "Tokens": "The basic units of data (often partial structural syllables) processed by Large Language Models.",
+  "Gemini": "A multimodal artificial intelligence model natively designed by Google, capable of processing various data streams.",
+};
+
+const renderHighlightedText = (text: string, interactive: boolean = false) => {
+  if (!text) return "";
+  let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  
+  // Highlighting without horizontal layout shifts for edit mode overlay sync
+  html = html.replace(/(\[?(?:Voiceover|VO)(?::|-)[^\]\n]*\]?)/gi, '<span class="text-purple-400 bg-purple-500/10">$1</span>');
+  html = html.replace(/(\[?(?:B-roll|B-Roll|Visual|Graphic)(?::|-)[^\]\n]*\]?)/gi, '<span class="text-amber-400 bg-amber-500/10">$1</span>');
+  html = html.replace(/(\([^)]+\))/g, '<span class="text-slate-400 italic bg-slate-800/40">$1</span>');
+  
+  if (interactive) {
+    Object.keys(KEY_TERMS).forEach(term => {
+      const regex = new RegExp(`\\b(${term})\\b`, 'gi');
+      html = html.replace(regex, `<span class="text-cyan-400 font-semibold underline decoration-cyan-400/40 decoration-dashed hover:text-cyan-300 hover:bg-cyan-500/20 cursor-pointer term-btn transition-colors rounded" data-term="$1">$&</span>`);
+    });
+  }
+  
+  if (html[html.length - 1] === '\n') html += ' ';
+  return html;
+};
 
 interface LogEvent {
   feature: string;
   status: string;
   message: string;
   payload?: any;
+}
+
+interface ChapterResult {
+  title: string;
+  script: string;
+  videoUrl?: string;
+  approved?: boolean;
+  youtubeUrl?: string;
+  uploading?: boolean;
 }
 
 interface PipelineState {
@@ -37,6 +84,7 @@ interface PipelineState {
   finalScriptOutput: string;
   chaptersList: string[];
   videoUrl?: string;
+  generatedChapters?: ChapterResult[];
 }
 
 export default function App() {
@@ -73,6 +121,42 @@ export default function App() {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const [chartData, setChartData] = useState<{ time: string, chapters: number, duration: number }[]>([]);
+  const [activeTab, setActiveTab] = useState<"pipeline" | "script">("pipeline");
+  const [scriptFeedback, setScriptFeedback] = useState<string>("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeChapterIndex, setActiveChapterIndex] = useState<number>(0);
+  
+  const [editorView, setEditorView] = useState<"edit" | "review">("edit");
+  const [activeTermPopup, setActiveTermPopup] = useState<{ term: string, def: string, x: number, y: number } | null>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  const handleEditorScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (highlightRef.current) {
+      highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+      highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+    }
+  };
+
+  const handleReviewClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.classList.contains('term-btn')) {
+      const term = target.getAttribute('data-term');
+      if (term) {
+        const originalTerm = Object.keys(KEY_TERMS).find(k => k.toLowerCase() === term.toLowerCase());
+        if (originalTerm) {
+          const rect = target.getBoundingClientRect();
+          setActiveTermPopup({ 
+            term: originalTerm, 
+            def: KEY_TERMS[originalTerm],
+            x: Math.min(rect.left, window.innerWidth - 260),
+            y: rect.bottom + 10
+          });
+        }
+      }
+    } else {
+      setActiveTermPopup(null);
+    }
+  };
 
   // Load backend configurations
   useEffect(() => {
@@ -292,6 +376,18 @@ export default function App() {
     }
   };
 
+  const uploadToYoutube = async (chapterTitle: string) => {
+    try {
+      await fetch("/api/youtube/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterTitle }),
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     if (status === "EXECUTING") return "text-amber-400 animate-pulse";
     if (status === "VERIFIED SUCCESS") return "text-emerald-400 font-semibold";
@@ -307,7 +403,30 @@ export default function App() {
     : 0;
 
   return (
-    <div className="h-screen w-screen bg-[#090d16] text-slate-100 flex flex-col overflow-hidden font-sans select-none">
+    <div 
+      className="h-screen w-screen bg-[#090d16] text-slate-100 flex flex-col overflow-hidden font-sans select-none"
+      onClick={(e) => {
+        if (!(e.target as HTMLElement).classList.contains('term-btn')) {
+          setActiveTermPopup(null);
+        }
+      }}
+    >
+      
+      {/* Term Definition Popup Workspace */}
+      {activeTermPopup && (
+        <div 
+          className="fixed z-[100] bg-[#0c1221] border border-slate-700 shadow-xl rounded-lg p-4 w-64 animate-in fade-in zoom-in duration-200"
+          style={{ top: activeTermPopup.y, left: activeTermPopup.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-start mb-2">
+            <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest">{activeTermPopup.term}</h4>
+            <button onClick={() => setActiveTermPopup(null)} className="text-slate-500 hover:text-slate-300 transition-colors"><StopCircle className="w-4 h-4 flex rotate-45" /></button>
+          </div>
+          <div className="w-full h-px bg-slate-800 mb-2"></div>
+          <p className="text-xs text-slate-300 leading-relaxed font-sans">{activeTermPopup.def}</p>
+        </div>
+      )}
       
       {/* GLOW BAR */}
       <div className="h-[2px] w-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-indigo-500 shrink-0 z-20" />
@@ -341,6 +460,13 @@ export default function App() {
           </div>
 
           {/* Core Controls */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-[#0f172a] hover:bg-[#1e293b] text-slate-300 border border-slate-800 text-xs font-semibold uppercase rounded transition-all cursor-pointer"
+          >
+            <Settings className="w-4 h-4" /> API Settings
+          </button>
+          
           {pipeline.isProcessing ? (
             <button 
               onClick={stopPipeline}
@@ -359,39 +485,41 @@ export default function App() {
         </div>
       </header>
 
-      {/* WORKSPACE AREA */}
-      <div className="flex-1 flex overflow-hidden">
-        
-        {/* LEFT COMPILER PANEL: Inputs & Selection Dropdown */}
-        <div className="w-[380px] shrink-0 border-r border-slate-800 bg-[#0b101f] flex flex-col overflow-y-auto p-5 gap-6 select-text">
-          
-          {/* SECURE AUTO-SAVE API KEYS */}
-          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2 shrink-0">
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm shadow-[0_0_15px_rgba(0,0,0,0.5)] z-50 flex items-center justify-center animate-in fade-in duration-200">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-xl p-6 relative shadow-2xl">
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
+            >
+              <StopCircle className="w-5 h-5 flex rotate-45" />
+            </button>
+
+            <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-emerald-400" />
-                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200">API Credentials</h2>
+                <Settings className="w-5 h-5 text-emerald-400" />
+                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-200">API Credentials</h2>
               </div>
               
-              {/* Intelligent Save Status Badging */}
               {saveStatus === "saving" && (
-                <span className="text-[9px] font-mono font-bold text-amber-400 uppercase animate-pulse">
+                <span className="text-[10px] font-mono font-bold text-amber-400 uppercase animate-pulse">
                   Auto-saving...
                 </span>
               )}
               {saveStatus === "saved" && (
-                <span className="text-[9px] font-mono font-bold text-emerald-400 uppercase pt-0.5">
+                <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase pt-0.5">
                   ✓ Saved
                 </span>
               )}
             </div>
 
-            <p className="text-[10px] text-slate-400 leading-relaxed m-0 text-balance">
+            <p className="text-xs text-slate-400 leading-relaxed mb-6 text-balance">
               API Keys are automatically captured and saved directly on standard inputs. No manual clicks required.
             </p>
 
-            <div className="grid grid-cols-[145px_1fr] gap-x-2 gap-y-3 items-center">
-              <label className="text-[9.5px] font-mono uppercase tracking-wider text-slate-400">
+            <div className="grid grid-cols-[145px_1fr] gap-x-2 gap-y-4 items-center">
+              <label className="text-xs font-mono uppercase tracking-wider text-slate-400">
                 Google Gemini Key
               </label>
               <input 
@@ -399,10 +527,10 @@ export default function App() {
                 value={geminiKey}
                 placeholder="Paste Gemini Key here..."
                 onChange={(e) => handleGeminiChange(e.target.value)}
-                className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors selection:bg-emerald-500/25"
+                className="w-full bg-[#080d16] border border-slate-800 rounded-md px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 outline-none transition-colors selection:bg-emerald-500/25"
               />
 
-              <label className="text-[9.5px] font-mono uppercase tracking-wider text-slate-400">
+              <label className="text-xs font-mono uppercase tracking-wider text-slate-400">
                 OpenAI Key (Opt)
               </label>
               <input 
@@ -410,11 +538,28 @@ export default function App() {
                 value={openaiKey}
                 placeholder="Paste OpenAI Key if active..."
                 onChange={(e) => handleOpenAiChange(e.target.value)}
-                className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors"
+                className="w-full bg-[#080d16] border border-slate-800 rounded-md px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 outline-none transition-colors"
               />
             </div>
-          </div>
 
+            <div className="mt-8 flex justify-end">
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WORKSPACE AREA */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* LEFT COMPILER PANEL: Inputs & Selection Dropdown */}
+        <div className="w-[350px] shrink-0 border-r border-slate-800 bg-[#0b101f] flex flex-col overflow-y-auto p-5 gap-6 select-text">
+          
           {/* DYNAMIC UPLOAD REGISTRATION PANEL */}
           <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
@@ -537,129 +682,339 @@ export default function App() {
         {/* CENTER PANE: Splitted Workspace (Original payload presentation) */}
         <div className="flex-1 flex flex-col bg-[#070b13] overflow-hidden">
           
-          {/* Workspace Title bar */}
-          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center px-6 shrink-0 justify-between">
-            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <FileText className="w-3.5 h-3.5 text-emerald-400" /> Interactive Payload Inspector
-            </span>
-            {pipeline.currentBook && (
-              <span className="text-[10px] font-mono bg-slate-900 border border-slate-800 text-cyan-400 px-2 py-0.5 rounded">
-                Active Book: {pipeline.currentBook}
-              </span>
-            )}
+          {/* Workspace Tabs */}
+          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center shrink-0">
+            <button 
+              onClick={() => setActiveTab("pipeline")}
+              className={`h-full px-6 flex items-center gap-2 border-r border-slate-800 text-[10px] font-mono tracking-widest uppercase transition-colors select-none outline-none ${activeTab === "pipeline" ? "bg-[#0b101f] text-emerald-400 border-b-2 border-b-emerald-400" : "text-slate-500 hover:text-slate-300 hover:bg-[#0b101f]/50"}`}
+            >
+              <FileCheck className="w-3.5 h-3.5" /> Pipeline Explorer
+            </button>
+            <button 
+              onClick={() => setActiveTab("script")}
+              className={`h-full px-6 flex items-center gap-2 border-r border-slate-800 text-[10px] font-mono tracking-widest uppercase transition-colors select-none outline-none ${activeTab === "script" ? "bg-[#0b101f] text-emerald-400 border-b-2 border-b-emerald-400" : "text-slate-500 hover:text-slate-300 hover:bg-[#0b101f]/50"}`}
+            >
+              <FileText className="w-3.5 h-3.5" /> Script Workspace
+            </button>
+
+            <div className="flex-1 flex justify-end px-6">
+              {pipeline.currentBook && (
+                <span className="text-[10px] font-mono bg-[#070b13] border border-slate-800 text-cyan-400 px-2 py-0.5 rounded shadow-inner">
+                  Active Resource: {pipeline.currentBook}
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="flex-1 flex overflow-hidden">
-            
-            {/* Split Left Panel: Raw Extracted Book Stream */}
-            <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
-              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                <FileCheck className="w-4 h-4 text-slate-400" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                  1. Raw Book Segment Cache (PyMuPDF)
-                </span>
-              </div>
-              <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
-              </div>
-            </div>
-
-            {/* Split Right Panel: Synthesized Text Drafts */}
-            <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
-              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-emerald-400" />
+          {activeTab === "pipeline" ? (
+            <div className="flex-1 flex overflow-hidden">
+              
+              {/* Split Left Panel: Raw Extracted Book Stream */}
+              <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
+                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                  <Database className="w-4 h-4 text-slate-400" />
                   <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                    2. Generated Lesson Script & Video
+                    1. Raw Book Segment Cache (PyMuPDF)
                   </span>
                 </div>
-                {pipeline.videoUrl && (
-                  <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
-                    ● Video Compiled
-                  </span>
+                <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                  {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
+                </div>
+              </div>
+
+              {/* Split Right Panel: Synthesized Video & Mini-Script */}
+              <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
+                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Compass className="w-4 h-4 text-emerald-400" />
+                    <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                      2. Generated Video Stream
+                    </span>
+                  </div>
+                  {pipeline.videoUrl && (
+                    <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
+                      ● Compiled
+                    </span>
+                  )}
+                </div>
+
+                {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
+                {pipeline.videoUrl ? (
+                  <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 flex-none flex flex-col items-center w-full">
+                    <div className="w-full relative overflow-hidden rounded-lg border border-slate-800 bg-black shadow-lg shadow-black/40 aspect-video">
+                      <video 
+                        key={pipeline.videoUrl}
+                        controls 
+                        autoPlay={pipeline.completedChapters > 0}
+                        className="absolute inset-0 w-full h-full object-contain"
+                        referrerPolicy="no-referrer"
+                      >
+                        <source src={pipeline.videoUrl} type="video/mp4" />
+                        Your browser does not support the video tag.
+                      </video>
+                      {/* Minimalist Watermark overlay */}
+                      <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase z-10">
+                        Media Render Active • 1080p
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center mt-3 pt-1 w-full">
+                      <span className="text-[10px] font-mono text-slate-400 truncate pr-3" title={pipeline.currentChapterTitle || "Chapter Overview"}>
+                        Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
+                      </span>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {(() => {
+                           const activeCh = pipeline.generatedChapters?.find(ch => ch.videoUrl === pipeline.videoUrl);
+                           if (activeCh?.youtubeUrl) {
+                             return <a href={activeCh.youtubeUrl} target="_blank" rel="noopener noreferrer" className="text-[10.5px] font-bold text-red-500 hover:text-red-400 hover:underline uppercase tracking-wide flex items-center gap-1"><Youtube className="w-3.5 h-3.5" /> Published</a>;
+                           } else if (activeCh?.uploading) {
+                             return <span className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1 animate-pulse"><UploadCloud className="w-3.5 h-3.5" /> Uploading...</span>;
+                           } else if (activeCh) {
+                             return <button onClick={() => uploadToYoutube(activeCh.title)} className="text-[10.5px] font-bold text-slate-300 hover:text-white uppercase tracking-wide flex items-center gap-1"><UploadCloud className="w-3.5 h-3.5" /> Upload</button>;
+                           }
+                           return null;
+                        })()}
+                        <div className="w-px h-3 bg-slate-700 mx-1"></div>
+                        <a 
+                          href={pipeline.videoUrl} 
+                          download={`lecture_export.mp4`}
+                          className="text-[10.5px] font-bold text-emerald-400 hover:text-emerald-300 hover:underline uppercase tracking-wide flex items-center gap-1"
+                        >
+                          Download
+                        </a>
+                        <a 
+                          href={pipeline.videoUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="text-[10.5px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline uppercase tracking-wide flex items-center gap-1"
+                        >
+                          Open
+                        </a>
+                      </div>
+                    </div>
+                    
+                    {/* Multi-chapter video selection list */}
+                    {pipeline.generatedChapters && pipeline.generatedChapters.length > 1 && (
+                      <div className="mt-4 pt-3 border-t border-slate-800 flex gap-2 overflow-x-auto pb-1 pb-scroll">
+                        {pipeline.generatedChapters.map((chap, idx) => (
+                          <div 
+                            key={idx} 
+                            onClick={() => {
+                              if (chap.videoUrl) setPipeline({...pipeline, videoUrl: chap.videoUrl, currentChapterTitle: chap.title});
+                            }}
+                            className={`shrink-0 w-28 p-1.5 border rounded cursor-pointer transition-colors ${pipeline.videoUrl === chap.videoUrl ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-800 hover:border-slate-700 bg-[#070b13]'}`}
+                          >
+                            <div className="w-full aspect-video bg-black flex items-center justify-center rounded-sm text-slate-800 relative shadow-inner overflow-hidden mb-1">
+                               {chap.youtubeUrl ? (
+                                 <div className="absolute top-1 right-1 bg-black/60 rounded p-0.5"><CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" /></div>
+                               ) : chap.uploading ? (
+                                 <div className="absolute top-1 right-1 bg-black/60 rounded p-0.5"><UploadCloud className="w-2.5 h-2.5 text-amber-400 animate-pulse" /></div>
+                               ) : null}
+                               <Play className="w-3 h-3 absolute z-10 text-slate-500" />
+                            </div>
+                            <div className="text-[9px] font-mono text-slate-400 truncate text-center uppercase tracking-wider">{chap.title}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-8 border-b border-slate-800 shrink-0 flex flex-col items-center justify-center opacity-50 bg-[#0a0f1d] min-h-[35vh]">
+                    <div className="w-12 h-12 rounded-full border border-slate-700 flex items-center justify-center mb-3">
+                      <Play className="w-5 h-5 text-slate-600 ml-1" />
+                    </div>
+                    <span className="text-xs font-mono text-slate-500 uppercase tracking-widest text-center">
+                      Awaiting Render Data
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-300 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20 bg-slate-950/30">
+                  <div className="mb-2 text-xs font-mono text-slate-500 uppercase tracking-widest border-b border-slate-800 pb-2">Latest Synced Chunk</div>
+                  {pipeline.finalScriptOutput ? (
+                     <div className="line-clamp-6 opacity-75">{pipeline.finalScriptOutput}</div>
+                  ) : "Awaiting multi-agent syllabus structuring. Switch to 'Script Workspace' tab to edit or review the full comprehensive script."
+                  }
+                  
+                  {pipeline.finalScriptOutput && (
+                    <button 
+                      onClick={() => setActiveTab("script")}
+                      className="mt-4 text-xs font-bold text-emerald-400 hover:text-emerald-300 uppercase tracking-wider flex items-center gap-1"
+                    >
+                      Open Full Script Workspace <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* DUAL GATE APPROVAL THRESHOLD */}
+                {pipeline.waitingApproval && (
+                  <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+                    <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+                      <AlertTriangle className="w-7 h-7 animate-pulse" />
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
+                      Human Authorization Threshold
+                    </h3>
+                    <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
+                      The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
+                    </p>
+                    
+                    <div className="flex gap-4">
+                      <button 
+                        onClick={stopPipeline} 
+                        className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
+                      >
+                        Dismount
+                      </button>
+                      <button 
+                        onClick={approvePipeline} 
+                        className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
+                      >
+                        Sign off script <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
-              {pipeline.videoUrl && (
-                <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
-                  <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video max-h-[35vh] w-full flex items-center justify-center relative group shadow-lg shadow-black/40">
-                    <video 
-                      key={pipeline.videoUrl}
-                      controls 
-                      autoPlay={pipeline.completedChapters > 0}
-                      className="w-full h-full object-contain"
-                      referrerPolicy="no-referrer"
+            </div>
+          ) : (
+            <div className="flex-1 flex bg-slate-950/30 overflow-hidden relative">
+              
+              {/* Script Chapter Selector Sidebar */}
+              <div className="w-64 shrink-0 border-r border-slate-800 bg-[#070b13] flex flex-col pt-4">
+                <span className="text-[10px] font-bold tracking-widest font-mono text-slate-500 uppercase px-5 mb-3">
+                   Generated Chapters
+                </span>
+                <div className="flex-1 overflow-y-auto">
+                  {pipeline.generatedChapters?.map((chap, idx) => (
+                    <button 
+                      key={idx}
+                      onClick={() => setActiveChapterIndex(idx)}
+                      className={`w-full text-left px-5 py-3 border-l-2 text-xs transition-colors flex items-center justify-between group ${activeChapterIndex === idx ? 'border-emerald-500 bg-[#0a0f1d] text-slate-200' : 'border-transparent text-slate-400 hover:bg-slate-900 hover:text-slate-300'}`}
                     >
-                      <source src={pipeline.videoUrl} type="video/mp4" />
-                      Your browser does not support the video tag.
-                    </video>
-                    {/* Minimalist Watermark overlay */}
-                    <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
-                      Media Render Active • 1080p
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-center mt-3 pt-1">
-                    <span className="text-[10px] font-mono text-slate-400 truncate pr-3" title={pipeline.currentChapterTitle || "Chapter Overview"}>
-                      Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
-                    </span>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <a 
-                        href={pipeline.videoUrl} 
-                        download={`lecture_export.mp4`}
-                        className="text-[10.5px] font-bold text-emerald-400 hover:text-emerald-300 hover:underline uppercase tracking-wide flex items-center gap-1"
-                      >
-                        Download
-                      </a>
-                      <a 
-                        href={pipeline.videoUrl} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="text-[10.5px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline uppercase tracking-wide flex items-center gap-1"
-                      >
-                        Open
-                      </a>
-                    </div>
-                  </div>
+                      <span className="line-clamp-2 font-mono flex-1 pr-2">{chap.title}</span>
+                      {activeChapterIndex === idx && <ArrowRight className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                    </button>
+                  ))}
+                  {(!pipeline.generatedChapters || pipeline.generatedChapters.length === 0) && (
+                    <div className="px-5 py-3 text-[10px] text-slate-600 font-mono uppercase">Waiting for agents...</div>
+                  )}
                 </div>
-              )}
-
-              <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
               </div>
 
-              {/* DUAL GATE APPROVAL THRESHOLD */}
-              {pipeline.waitingApproval && (
-                <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
-                  <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
-                    <AlertTriangle className="w-7 h-7 animate-pulse" />
-                  </div>
-                  <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
-                    Human Authorization Threshold
-                  </h3>
-                  <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
-                    The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
-                  </p>
-                  
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={stopPipeline} 
-                      className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
-                    >
-                      Dismount
-                    </button>
-                    <button 
-                      onClick={approvePipeline} 
-                      className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
-                    >
-                      Sign off script <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+              {/* Main Script Editor */}
+              <div className="flex-1 flex flex-col relative min-w-0">
+                <div className="flex-1 p-6 overflow-y-auto flex flex-col items-center">
+                  <div className="w-full max-w-3xl flex-1 flex flex-col">
+                     <div className="flex items-center justify-between mb-4 shrink-0">
+                       <h3 className="text-sm font-bold uppercase tracking-widest text-slate-200 flex items-center gap-2">
+                         <FileText className="w-4 h-4 text-emerald-400" /> Lesson Script Editor
+                       </h3>
+                       <div className="flex items-center gap-4">
+                         <a
+                           href={`data:text/plain;charset=utf-8,${encodeURIComponent(pipeline.generatedChapters?.[activeChapterIndex]?.script || pipeline.finalScriptOutput || '')}`}
+                           download={`script_${pipeline.generatedChapters?.[activeChapterIndex]?.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'export'}.txt`}
+                           className="flex items-center gap-1.5 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-[9px] font-bold text-cyan-400 hover:text-cyan-300 uppercase tracking-widest transition-colors cursor-pointer rounded border border-slate-700 hover:border-slate-600"
+                           onClick={(e) => {
+                             if (!(pipeline.generatedChapters?.[activeChapterIndex]?.script || pipeline.finalScriptOutput)) {
+                               e.preventDefault();
+                             }
+                           }}
+                         >
+                           <Download className="w-3 h-3" /> Export Script
+                         </a>
+                         <span className="text-[10px] font-mono text-slate-500 uppercase">
+                           {pipeline.generatedChapters?.[activeChapterIndex]?.script?.length || pipeline.finalScriptOutput.length || 0} Characters
+                         </span>
+                       </div>
+                     </div>
+                     <div className="flex-1 w-full bg-[#0c1221] border border-slate-800 rounded flex flex-col shadow-inner relative min-h-[350px]">
+                       <div className="h-10 bg-[#080d15] border-b border-slate-800 flex items-center justify-between px-3 shrink-0">
+                         <div className="flex gap-1.5 bg-[#0c1221] p-1 rounded-md border border-slate-800/50">
+                           <button 
+                             onClick={() => setEditorView("edit")}
+                             className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded transition-all ${editorView === 'edit' ? 'bg-emerald-500/20 text-emerald-400 shadow-sm' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'}`}
+                           >
+                             Real-Time Editor
+                           </button>
+                           <button 
+                             onClick={() => setEditorView("review")}
+                             className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded transition-all flex items-center gap-1.5 ${editorView === 'review' ? 'bg-cyan-500/20 text-cyan-400 shadow-sm' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'}`}
+                           >
+                             <BookOpen className="w-3.5 h-3.5" /> Interactive Review
+                           </button>
+                         </div>
+                       </div>
+                       <div className="relative flex-1 overflow-hidden group">
+                         {editorView === 'edit' ? (
+                           <>
+                             <div 
+                               ref={highlightRef}
+                               className="absolute inset-0 p-6 text-sm font-serif leading-loose whitespace-pre-wrap break-words pointer-events-none z-0 overflow-auto text-slate-300"
+                               dangerouslySetInnerHTML={{ __html: renderHighlightedText(pipeline.generatedChapters?.[activeChapterIndex]?.script || pipeline.finalScriptOutput, false) }}
+                             />
+                             <textarea
+                               value={pipeline.generatedChapters?.[activeChapterIndex]?.script || pipeline.finalScriptOutput}
+                               onChange={(e) => {
+                                 const newVal = e.target.value;
+                                 if (pipeline.generatedChapters && pipeline.generatedChapters[activeChapterIndex]) {
+                                   const updatedChapters = [...pipeline.generatedChapters];
+                                   updatedChapters[activeChapterIndex] = { ...updatedChapters[activeChapterIndex], script: newVal };
+                                   setPipeline({...pipeline, generatedChapters: updatedChapters});
+                                 } else {
+                                   setPipeline({...pipeline, finalScriptOutput: newVal});
+                                 }
+                               }}
+                               onScroll={handleEditorScroll}
+                               placeholder="The synthesized academic script will populate here..."
+                               className="absolute inset-0 w-full h-full p-6 text-sm font-serif leading-loose outline-none resize-none z-10 bg-transparent text-transparent caret-emerald-400 selection:bg-emerald-500/25 overflow-auto shadow-inner"
+                               spellCheck="false"
+                             />
+                           </>
+                         ) : (
+                           <div 
+                             className="absolute inset-0 p-6 text-sm font-serif text-slate-200 leading-loose whitespace-pre-wrap break-words overflow-y-auto selection:bg-cyan-500/20 cursor-text shadow-inner"
+                             onClick={handleReviewClick}
+                             dangerouslySetInnerHTML={{ __html: renderHighlightedText(pipeline.generatedChapters?.[activeChapterIndex]?.script || pipeline.finalScriptOutput, true) }}
+                           />
+                         )}
+                       </div>
+                     </div>
                   </div>
                 </div>
-              )}
+                
+                {/* Fixed Refinement Prompt Input at Bottom */}
+                <div className="h-44 border-t border-slate-800 bg-[#0c1221] p-5 flex flex-col items-center shrink-0">
+                  <div className="w-full max-w-3xl flex flex-col gap-3 h-full">
+                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                      <Settings className="w-3.5 h-3.5" /> Suggestion & Refinement Prompt
+                    </h3>
+                    <textarea 
+                      value={scriptFeedback}
+                      onChange={(e) => setScriptFeedback(e.target.value)}
+                      placeholder="E.g., Make the tone more professional and technical, expand on chapter concepts, add bullet points..."
+                      className="flex-1 w-full bg-[#080d16] border border-slate-800 rounded p-3 text-xs text-slate-200 focus:border-cyan-500 outline-none resize-none selection:bg-cyan-500/30"
+                    />
+                    <div className="flex justify-end pt-1">
+                      <button 
+                        onClick={() => {
+                          if (!scriptFeedback) return;
+                          setLogs(prev => [...prev, { feature: 'SCRIPT_AGENT', status: 'WAITING', message: `Sending feedback for ${pipeline.generatedChapters?.[activeChapterIndex]?.title || 'active script'}: "${scriptFeedback}"` }]);
+                          setScriptFeedback("");
+                          alert("Feedback submitted to AI Scriptwriter for generation. (Simulation)");
+                        }}
+                        className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs uppercase tracking-wider rounded shadow transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!scriptFeedback.trim()}
+                      >
+                        Send Feedback <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
+
 
         {/* RIGHT PANE: Telemetry logs & Chart */}
         <div className="w-[320px] shrink-0 border-l border-slate-800 flex flex-col bg-[#0b101f] select-text">

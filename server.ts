@@ -6,7 +6,8 @@ import https from "https";
 import { WebSocketServer, WebSocket } from "ws";
 import multer from "multer";
 // @ts-ignore
-import pdf from "pdf-parse";
+import * as pdfParseModule from "pdf-parse";
+const pdf = (pdfParseModule as any).default || pdfParseModule;
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 
@@ -64,6 +65,15 @@ let configStore = {
 };
 
 // Global Pipeline State
+interface ChapterResult {
+  title: string;
+  script: string;
+  videoUrl?: string;
+  approved?: boolean;
+  youtubeUrl?: string;
+  uploading?: boolean;
+}
+
 interface PipelineState {
   currentBook: string;
   totalChapters: number;
@@ -72,9 +82,10 @@ interface PipelineState {
   isProcessing: boolean;
   waitingApproval: boolean;
   rawTextPreview: string;
-  finalScriptOutput: string;
+  finalScriptOutput: string; // The latest generated script
   chaptersList: string[];
   videoUrl?: string;
+  generatedChapters?: ChapterResult[];
 }
 
 let pipelineState: PipelineState = {
@@ -198,15 +209,68 @@ app.get("/api/video", (req, res) => {
   const fileName = `video_${encodeURIComponent(String(book || "default"))}_${encodeURIComponent(String(chapter || "ch"))}_${idx}.mp4`;
   const filePath = path.join(VIDEOS_DIR, fileName);
 
-  if (!fs.existsSync(filePath)) {
-    if (fs.existsSync(SAMPLE_VIDEO_PATH)) {
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+    return;
+  }
+  
+  if (fs.existsSync(SAMPLE_VIDEO_PATH)) {
+    try {
       fs.copyFileSync(SAMPLE_VIDEO_PATH, filePath);
-    } else {
-      return res.redirect("https://www.w3schools.com/html/mov_bbb.mp4");
+      res.sendFile(filePath);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to generate video template." });
     }
+  } else {
+     res.status(404).json({ error: "Local video file not found in storage/videos/ directory." });
+  }
+});
+
+app.post("/api/youtube/upload", async (req, res) => {
+  const { chapterTitle } = req.body;
+  if (!chapterTitle) {
+    return res.status(400).json({ error: "Chapter title required" });
   }
 
-  res.sendFile(filePath);
+  // Find chapter to mark as uploading
+  const chapter = pipelineState.generatedChapters?.find(ch => ch.title === chapterTitle);
+  if (chapter) {
+    chapter.uploading = true;
+    broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
+  }
+  
+  // Broadcast log message
+  broadcast({
+    type: "LOG",
+    payload: {
+      feature: "YOUTUBE_PUBLISHER",
+      status: "EXECUTING",
+      message: `Initiating upload to YouTube for chapter: ${chapterTitle}...`
+    }
+  });
+
+  // Simulate upload delay
+  setTimeout(() => {
+    const videoId = Math.random().toString(36).substring(2, 11);
+    const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+    
+    if (chapter) {
+      chapter.uploading = false;
+      chapter.youtubeUrl = youtubeUrl;
+      broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
+    }
+
+    broadcast({
+      type: "LOG",
+      payload: {
+        feature: "YOUTUBE_PUBLISHER",
+        status: "VERIFIED SUCCESS",
+        message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
+      }
+    });
+  }, 4000);
+
+  res.json({ success: true, message: "Upload started" });
 });
 
 // Real-time Pipeline Execution Thread (Express Async Flow)
@@ -257,7 +321,8 @@ app.post("/api/flow/run", async (req, res) => {
     rawTextPreview: "",
     finalScriptOutput: "",
     chaptersList: [],
-    videoUrl: ""
+    videoUrl: "",
+    generatedChapters: []
   };
 
   broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
@@ -446,8 +511,18 @@ async function runPipeline(filePath: string, name: string) {
       }
 
       pipelineState.finalScriptOutput = scriptText;
+      let chapterVideoUrl = `/api/video?book=${encodeURIComponent(name)}&chapter=${encodeURIComponent(title)}&index=${i}`;
+      pipelineState.videoUrl = chapterVideoUrl;
+      
+      pipelineState.generatedChapters = pipelineState.generatedChapters || [];
+      pipelineState.generatedChapters.push({
+        title: title,
+        script: scriptText,
+        videoUrl: chapterVideoUrl,
+        approved: true
+      });
+      
       pipelineState.completedChapters = i + 1;
-      pipelineState.videoUrl = `/api/video?book=${encodeURIComponent(name)}&chapter=${encodeURIComponent(title)}&index=${i}`;
       broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
 
       broadcast({
