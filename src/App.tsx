@@ -1,5 +1,21 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Terminal, Settings, CheckCircle, Clock, AlertTriangle, Play, FileText, Database } from "lucide-react";
+import { 
+  Terminal, 
+  Settings, 
+  CheckCircle, 
+  Clock, 
+  AlertTriangle, 
+  Play, 
+  FileText, 
+  Database,
+  UploadCloud,
+  FileCheck,
+  Compass,
+  ArrowRight,
+  BookOpen,
+  StopCircle,
+  HelpCircle
+} from "lucide-react";
 
 interface LogEvent {
   feature: string;
@@ -8,91 +24,280 @@ interface LogEvent {
   payload?: any;
 }
 
+interface PipelineState {
+  currentBook: string;
+  totalChapters: number;
+  completedChapters: number;
+  currentChapterTitle: string;
+  isProcessing: boolean;
+  waitingApproval: boolean;
+  rawTextPreview: string;
+  finalScriptOutput: string;
+  chaptersList: string[];
+  videoUrl?: string;
+}
+
 export default function App() {
+  // Config state
+  const [books, setBooks] = useState<string[]>([]);
+  const [selectedBook, setSelectedBook] = useState<string>("");
+  const [manualPath, setManualPath] = useState<string>("");
+  const [manualPathValid, setManualPathValid] = useState<boolean | null>(null);
+  const [manualPathError, setManualPathError] = useState<string>("");
+
+  // Key configurations with auto-save trackers
+  const [geminiKey, setGeminiKey] = useState<string>("");
+  const [openaiKey, setOpenaiKey] = useState<string>("");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Pipeline telemetry state
+  const [pipeline, setPipeline] = useState<PipelineState>({
+    currentBook: "",
+    totalChapters: 0,
+    completedChapters: 0,
+    currentChapterTitle: "",
+    isProcessing: false,
+    waitingApproval: false,
+    rawTextPreview: "",
+    finalScriptOutput: "",
+    chaptersList: [],
+    videoUrl: ""
+  });
+
   const [logs, setLogs] = useState<LogEvent[]>([]);
-  const [rawText, setRawText] = useState<string>("");
-  const [finalScript, setFinalScript] = useState<string>("");
-  const [wsStatus, setWsStatus] = useState("DISCONNECTED");
-  const [showSettings, setShowSettings] = useState(false);
-  const [isWaitingApproval, setIsWaitingApproval] = useState(false);
-  
-  const [geminiKey, setGeminiKey] = useState("");
-  const [openaiKey, setOpenaiKey] = useState("");
+  const [wsStatus, setWsStatus] = useState<"CONNECTED" | "DISCONNECTED" | "CONNECTING">("DISCONNECTED");
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string>("");
 
   const ws = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
+  // Load backend configurations
   useEffect(() => {
     connectWebSocket();
+    fetchBooks();
     fetchSettings();
+    return () => {
+      if (ws.current) ws.current.close();
+    };
   }, []);
 
+  // Scroll to logs end
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
+  // Handle auto-saving of keys
+  const triggerAutoSave = (gKey: string, oKey: string) => {
+    setSaveStatus("saving");
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            geminiKey: gKey,
+            openaiKey: oKey
+          })
+        });
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      } catch (e) {
+        console.error("Auto-save failed", e);
+        setSaveStatus("idle");
+      }
+    }, 600); // 600ms debounce
+  };
+
+  const handleGeminiChange = (val: string) => {
+    setGeminiKey(val);
+    triggerAutoSave(val, openaiKey);
+  };
+
+  const handleOpenAiChange = (val: string) => {
+    setOpenaiKey(val);
+    triggerAutoSave(geminiKey, val);
+  };
+
   const fetchSettings = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/settings");
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.hasGemini) setGeminiKey("••••••••••••••••");
-      if (data.hasOpenAI) setOpenaiKey("••••••••••••••••");
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        // Since we don't return plain secrets back to the browser for security, 
+        // we can set a mock bullet value if they are active on backend
+        if (data.hasGemini && !geminiKey) setGeminiKey("••••••••••••••••");
+        if (data.hasOpenAI && !openaiKey) setOpenaiKey("••••••••••••••••");
+      }
     } catch (e) {
-      console.warn("Could not fetch settings. Python backend may be offline.");
+      console.warn("Could not load current api variables from background.");
     }
   };
 
-  const saveSettings = async () => {
+  const fetchBooks = async () => {
     try {
-      await fetch("http://localhost:8000/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          geminiKey: geminiKey === "••••••••••••••••" ? null : geminiKey,
-          openaiKey: openaiKey === "••••••••••••••••" ? null : openaiKey
-        })
-      });
-      setShowSettings(false);
+      const res = await fetch("/api/books");
+      if (res.ok) {
+        const data = await res.json();
+        setBooks(data.files || []);
+        if (data.files && data.files.length > 0 && !selectedBook) {
+          setSelectedBook(data.files[0]);
+        }
+      }
     } catch (e) {
-      console.warn("Could not save settings. Python backend may be offline.");
-      setShowSettings(false);
+      console.warn("Book-scanner backend is initializing.");
     }
   };
 
   const connectWebSocket = () => {
-    ws.current = new WebSocket("ws://localhost:8000/ws");
-    ws.current.onopen = () => setWsStatus("CONNECTED");
+    setWsStatus("CONNECTING");
+    
+    // Auto bridge location port for zero-config setups
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws`;
+
+    ws.current = new WebSocket(wsUrl);
+
+    ws.current.onopen = () => {
+      setWsStatus("CONNECTED");
+    };
+
     ws.current.onclose = () => {
       setWsStatus("DISCONNECTED");
-      setTimeout(connectWebSocket, 3000);
+      setTimeout(connectWebSocket, 3000); // Poll connection
     };
+
     ws.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === "TELEMETRY") {
-        setLogs(prev => [...prev, data]);
-        if (data.payload?.rawText) setRawText(data.payload.rawText);
-        if (data.payload?.script) setFinalScript(data.payload.script);
-        if (data.feature === "HUMAN_GATE" && data.status === "WAITING") setIsWaitingApproval(true);
-        if (data.feature === "HUMAN_GATE" && data.status === "VERIFIED SUCCESS") setIsWaitingApproval(false);
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "INITIAL_STATE") {
+          setPipeline(data.state);
+        } else if (data.type === "PIPELINE_UPDATE") {
+          setPipeline(data.state);
+        } else if (data.type === "TELEMETRY") {
+          setLogs(prev => [...prev, data]);
+        }
+      } catch (err) {
+        console.error("WS error parsing event", err);
       }
     };
   };
 
-  const startPipeline = async () => {
-    setLogs([]); setRawText(""); setFinalScript(""); setIsWaitingApproval(false);
+  // Upload custom PDF file handler
+  const handleUpload = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      alert("Please upload a valid document in PDF format.");
+      return;
+    }
+
+    setUploadProgress("Uploading file...");
+    const formData = new FormData();
+    formData.append("book", file);
+
     try {
-      const res = await fetch("http://localhost:8000/api/flow/run", { method: "POST" });
-      const data = await res.json();
-      if (data.error) alert(data.error);
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUploadProgress("Success!");
+        await fetchBooks();
+        setSelectedBook(data.filename);
+        setManualPath(""); // Clear manual overrides
+        setTimeout(() => setUploadProgress(""), 2000);
+      } else {
+        setUploadProgress("Upload failed.");
+      }
     } catch (e) {
-      alert("Failed to start pipeline. Is the Python backend running on port 8000?");
+      setUploadProgress("Error upload.");
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleUpload(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Validation of Custom Manual Paths on Server Disk
+  const validateManualPath = async () => {
+    if (!manualPath) {
+      setManualPathValid(null);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/books/validate-path", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: manualPath })
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setManualPathValid(true);
+        setManualPathError("");
+        setSelectedBook(""); // Deselect dropdown to indicate manual path is active
+      } else {
+        setManualPathValid(false);
+        setManualPathError(data.error || "File path could not be found.");
+      }
+    } catch (err) {
+      setManualPathValid(false);
+      setManualPathError("Failed connecting to path verification logic.");
+    }
+  };
+
+  const startPipeline = async () => {
+    setLogs([]);
+    try {
+      const payload: any = {};
+      if (manualPath && manualPathValid) {
+        payload.manualPath = manualPath;
+      } else if (selectedBook) {
+        payload.filename = selectedBook;
+      }
+
+      const res = await fetch("/api/flow/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+      }
+    } catch (e) {
+      alert("Failed connecting to media engine server.");
+    }
+  };
+
+  const stopPipeline = async () => {
+    try {
+      await fetch("/api/flow/stop", { method: "POST" });
+    } catch (e) {
+      console.error(e);
     }
   };
 
   const approvePipeline = async () => {
     try {
-      await fetch("http://localhost:8000/api/flow/approve", { method: "POST" });
+      await fetch("/api/flow/approve", { method: "POST" });
     } catch (e) {
       console.error(e);
     }
@@ -100,134 +305,464 @@ export default function App() {
 
   const getStatusColor = (status: string) => {
     if (status === "EXECUTING") return "text-amber-400 animate-pulse";
-    if (status === "VERIFIED SUCCESS") return "text-emerald-400 font-bold";
-    if (status === "FAILED") return "text-rose-500 font-bold";
+    if (status === "VERIFIED SUCCESS") return "text-emerald-400 font-semibold";
+    if (status === "FAILED") return "text-rose-400 font-semibold";
     if (status === "WAITING") return "text-cyan-400 animate-pulse";
-    return "text-slate-500";
+    return "text-slate-400";
   };
 
+  // Calculations for beautiful progress trackers
+  const hasChapters = pipeline.totalChapters > 0;
+  const progressPercent = hasChapters 
+    ? Math.round((pipeline.completedChapters / pipeline.totalChapters) * 100) 
+    : 0;
+
   return (
-    <div className="h-screen w-screen bg-[#070a13] text-slate-100 flex flex-col overflow-hidden font-sans">
+    <div className="h-screen w-screen bg-[#090d16] text-slate-100 flex flex-col overflow-hidden font-sans select-none">
       
+      {/* GLOW BAR */}
+      <div className="h-[2px] w-full bg-gradient-to-r from-emerald-500 via-cyan-500 to-indigo-500 shrink-0 z-20" />
+
       {/* HEADER */}
-      <header className="h-14 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-6 shrink-0 z-10 relative">
+      <header className="h-16 bg-[#0c1221] border-b border-slate-800 flex items-center justify-between px-6 shrink-0 z-10 shadow-lg shadow-black/20">
         <div className="flex items-center gap-3">
-          <Database className="w-5 h-5 text-emerald-500" />
-          <h1 className="font-bold text-sm uppercase tracking-widest text-slate-200">The Open Syllabus Engine</h1>
-          <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${wsStatus === 'CONNECTED' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
-            Backend: {wsStatus}
-          </span>
+          <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+            <BookOpen className="w-5 h-5 text-emerald-400" />
+          </div>
+          <div>
+            <h1 className="font-bold text-sm tracking-wide text-slate-200 uppercase">
+              Automated Book-to-Video Pipeline
+            </h1>
+            <p className="text-[10px] text-slate-400 font-mono">
+              Syllabus Generation Workstation • Version 2.1
+            </p>
+          </div>
         </div>
+
+        {/* WebSocket Connection Badge in Header */}
         <div className="flex items-center gap-4">
-          <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-emerald-400 transition-colors uppercase tracking-wider">
-            <Settings className="w-4 h-4" /> API Settings
-          </button>
-          <button onClick={startPipeline} className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold uppercase rounded transition-colors shadow-lg shadow-emerald-500/20">
-            <Play className="w-4 h-4" /> Run Folder Scan
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full relative flex">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${wsStatus === 'CONNECTED' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${wsStatus === 'CONNECTED' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+            </span>
+            <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-400">
+              Host Link: {wsStatus}
+            </span>
+          </div>
+
+          {/* Core Controls */}
+          {pipeline.isProcessing ? (
+            <button 
+              onClick={stopPipeline}
+              className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold uppercase rounded transition-all cursor-pointer"
+            >
+              <StopCircle className="w-4 h-4" /> Stop Process
+            </button>
+          ) : (
+            <button 
+              onClick={startPipeline}
+              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs uppercase tracking-wider rounded shadow-md shadow-emerald-500/20 transition-all hover:-translate-y-[1px] active:translate-y-0 cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-current" /> Start Pipeline
+            </button>
+          )}
         </div>
       </header>
 
-      {/* SPLIT SCREEN WORKSPACE */}
-      <main className="flex-1 flex overflow-hidden">
+      {/* WORKSPACE AREA */}
+      <div className="flex-1 flex overflow-hidden">
         
-        {/* LEFT PANE: Raw Data & Script Inspector */}
-        <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-900/40 min-w-0">
-          <div className="h-8 bg-slate-950 flex items-center px-4 border-b border-slate-800 shrink-0">
-            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">Left Pane: Payload Inspector</span>
-          </div>
+        {/* LEFT COMPILER PANEL: Inputs & Selection Dropdown */}
+        <div className="w-[380px] shrink-0 border-r border-slate-800 bg-[#0b101f] flex flex-col overflow-y-auto p-5 gap-6 select-text">
           
-          <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden min-h-0">
-            {/* Raw Text Window */}
-            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden min-h-0">
-              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase">1. Raw PDF Extraction (PyMuPDF)</span>
+          {/* SECURE AUTO-SAVE API KEYS */}
+          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between mb-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-400" />
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200">API Credentials</h2>
               </div>
-              <div className="flex-1 p-3 overflow-y-auto text-[11px] font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/30">
-                {rawText || "Waiting for PDF scan engine..."}
+              
+              {/* Intelligent Save Status Badging */}
+              {saveStatus === "saving" && (
+                <span className="text-[9px] font-mono font-bold text-amber-400 uppercase animate-pulse">
+                  Auto-saving...
+                </span>
+              )}
+              {saveStatus === "saved" && (
+                <span className="text-[9px] font-mono font-bold text-emerald-400 uppercase">
+                  ✓ Saved
+                </span>
+              )}
+            </div>
+
+            <p className="text-[10px] text-slate-400 mb-3 leading-relaxed">
+              API Keys are automatically captured and saved directly on standard inputs. No manual clicks required.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">
+                  Google Gemini Developer Key
+                </label>
+                <input 
+                  type="password" 
+                  value={geminiKey}
+                  placeholder="Paste Gemini Key here..."
+                  onChange={(e) => handleGeminiChange(e.target.value)}
+                  className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors selection:bg-emerald-500/25"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1">
+                  OpenAI Companion Key (Optional)
+                </label>
+                <input 
+                  type="password" 
+                  value={openaiKey}
+                  placeholder="Paste OpenAI Key if active..."
+                  onChange={(e) => handleOpenAiChange(e.target.value)}
+                  className="w-full bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:border-emerald-500 outline-none transition-colors"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* DYNAMIC BOOK DROPDOWN & OVERRIDE PANEL */}
+          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-cyan-400" />
+                <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200">Source Book Selection</h2>
+              </div>
+              <HelpCircle className="w-3.5 h-3.5 text-slate-500 hover:text-slate-300 cursor-pointer" title="Select a file from folder books_input/" />
+            </div>
+
+            {/* File Dropdown Selector */}
+            <div>
+              <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1.5">
+                Processed Books in Workspace
+              </label>
+              {books.length > 0 ? (
+                <select
+                  value={selectedBook}
+                  onChange={(e) => {
+                    setSelectedBook(e.target.value);
+                    setManualPath(""); // override manual paths
+                  }}
+                  className="w-full bg-[#080d16] border border-slate-800 text-slate-200 rounded px-2 py-2 text-xs focus:border-emerald-500 outline-none"
+                >
+                  {books.map((f, idx) => (
+                    <option key={idx} value={f}>
+                      📖 {f}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="text-[11px] text-rose-400 border border-rose-500/10 bg-rose-500/5 p-2 rounded">
+                  ⚠️ No book PDFs discovered in books_input/
+                </div>
+              )}
+            </div>
+
+            {/* MANUAL OVERRIDE DETECTION FIELD */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400">
+                  Manual Path Fallback Overrides
+                </label>
+                {manualPathValid === true && (
+                  <span className="text-[8px] uppercase font-bold text-emerald-400 tracking-wider font-mono">
+                    ● File Confirmed
+                  </span>
+                )}
+                {manualPathValid === false && (
+                  <span className="text-[8px] uppercase font-bold text-rose-400 tracking-wider font-mono">
+                    ● File Off-line
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. books_input/learning_guide.pdf"
+                  value={manualPath}
+                  onChange={(e) => {
+                    setManualPath(e.target.value);
+                    setManualPathValid(null);
+                  }}
+                  className="flex-1 bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
+                />
+                <button
+                  type="button"
+                  onClick={validateManualPath}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded transition-colors cursor-pointer"
+                >
+                  Link
+                </button>
+              </div>
+              {manualPathError && (
+                <p className="text-[10px] text-rose-400 mt-1 leading-snug">{manualPathError}</p>
+              )}
+              <p className="text-[9px] text-slate-500 mt-1.5">
+                Auto-detects invalid entries. Type file name or full disk address to link custom PDFs instantly.
+              </p>
+            </div>
+
+            {/* DRAG AND DROP HIGH-FLEXIBILITY UPLOAD REGISTRATION Card */}
+            <div 
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`border-2 border-dashed rounded-lg p-4 text-center transition-all cursor-pointer ${
+                isDragging ? "border-emerald-400 bg-emerald-500/5" : "border-slate-800 hover:border-slate-700"
+              }`}
+            >
+              <input 
+                type="file" 
+                id="file-input"
+                accept=".pdf"
+                className="hidden"
+                onChange={(e) => e.target.files && handleUpload(e.target.files[0])}
+              />
+              <label htmlFor="file-input" className="cursor-pointer block">
+                <UploadCloud className="w-7 h-7 mx-auto text-slate-400 mb-2" />
+                <span className="text-xs block font-semibold text-slate-300">Drag &amp; Drop custom Book PDF</span>
+                <span className="text-[10px] block text-slate-500 mt-1">or click here to browser-select file</span>
+                {uploadProgress && (
+                  <span className="text-[10px] font-mono block text-emerald-400 mt-2 font-bold animate-pulse">
+                    {uploadProgress}
+                  </span>
+                )}
+              </label>
+            </div>
+          </div>
+
+          {/* INTERACTIVE COMPILATION PROGRESS & CUSTOM STEPPER */}
+          <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200 border-b border-slate-800/60 pb-2 flex items-center gap-2">
+              <Compass className="w-4 h-4 text-emerald-400" /> Book Lecture Progress
+            </h2>
+
+            {/* Core Pipeline Progress Bar */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-semibold text-slate-400">Chapters Completed</span>
+                <span className="text-[11px] font-mono font-bold text-emerald-400">
+                  {pipeline.completedChapters} / {pipeline.totalChapters} ({progressPercent}%)
+                </span>
+              </div>
+              <div className="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-slate-700/40">
+                <div 
+                  className="bg-gradient-to-r from-emerald-500 to-cyan-500 h-2 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${progressPercent}%` }}
+                />
               </div>
             </div>
 
-            {/* Final Script Window */}
-            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden relative min-h-0">
-              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase">2. Generated Output Script (CrewAI)</span>
+            {/* Chapters Step Progress Stepper */}
+            {pipeline.chaptersList.length > 0 ? (
+              <div className="space-y-2 mt-4 max-h-[220px] overflow-y-auto pr-1">
+                {pipeline.chaptersList.map((ch, idx) => {
+                  const isCompleted = idx < pipeline.completedChapters;
+                  const isActive = idx === pipeline.completedChapters && pipeline.isProcessing;
+                  const isCurrent = pipeline.currentChapterTitle === ch;
+                  
+                  return (
+                    <div 
+                      key={idx} 
+                      className={`flex items-center gap-2.5 p-1.5 rounded text-xs border transition-colors duration-200 ${
+                        isActive || isCurrent
+                          ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-300"
+                          : isCompleted 
+                            ? "bg-[#0b101f] border-slate-800 text-slate-400"
+                            : "border-transparent text-slate-500"
+                      }`}
+                    >
+                      <div className="shrink-0">
+                        {isCompleted ? (
+                          <div className="w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] text-slate-950 font-bold">
+                            ✓
+                          </div>
+                        ) : idx === pipeline.completedChapters && pipeline.isProcessing ? (
+                          <div className="w-4 h-4 rounded-full bg-amber-500 animate-spin flex items-center justify-center text-[10px] text-slate-950 font-bold">
+                            ↻
+                          </div>
+                        ) : (
+                          <div className="w-4 h-4 rounded-full border border-slate-700 flex items-center justify-center text-[9px] font-mono">
+                            {idx + 1}
+                          </div>
+                        )}
+                      </div>
+                      <span className="truncate flex-1 font-mono text-[10.5px]">
+                        {ch}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="flex-1 p-3 overflow-y-auto text-xs font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/30">
-                {finalScript || "Waiting for Scholar & Scriptwriter agents..."}
+            ) : (
+              <span className="text-[10px] text-slate-500 italic block">
+                Await document parser stream...
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* CENTER PANE: Splitted Workspace (Original payload presentation) */}
+        <div className="flex-1 flex flex-col bg-[#070b13] overflow-hidden">
+          
+          {/* Workspace Title bar */}
+          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center px-6 shrink-0 justify-between">
+            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-2">
+              <FileText className="w-3.5 h-3.5 text-emerald-400" /> Interactive Payload Inspector
+            </span>
+            {pipeline.currentBook && (
+              <span className="text-[10px] font-mono bg-slate-900 border border-slate-800 text-cyan-400 px-2 py-0.5 rounded">
+                Active Book: {pipeline.currentBook}
+              </span>
+            )}
+          </div>
+
+          <div className="flex-1 flex overflow-hidden">
+            
+            {/* Split Top Panel: Raw Extracted Book Stream */}
+            <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
+              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                <FileCheck className="w-4 h-4 text-slate-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                  1. Raw Book Segment Cache (PyMuPDF)
+                </span>
+              </div>
+              <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
+              </div>
+            </div>
+
+            {/* Split Bottom Panel: Synthesized Text Drafts */}
+            <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
+              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Compass className="w-4 h-4 text-emerald-400" />
+                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                    2. Generated Lesson Script & Video
+                  </span>
+                </div>
+                {pipeline.videoUrl && (
+                  <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
+                    ● Video Compiled
+                  </span>
+                )}
               </div>
 
-              {/* HUMAN GATEWAY OVERLAY */}
-              {isWaitingApproval && (
-                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center animate-in fade-in">
-                  <AlertTriangle className="w-10 h-10 text-amber-400 mb-3 animate-pulse" />
-                  <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider mb-2">Human Approval Required</h3>
-                  <p className="text-xs text-slate-400 mb-6 max-w-md">The script has been generated and copyright-verified. Review the text above. Do you wish to proceed to media rendering and YouTube compilation?</p>
-                  <button onClick={approvePipeline} className="px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 transition-all">
-                    Proceed to Media Synthesis
-                  </button>
+              {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
+              {pipeline.videoUrl && (
+                <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
+                  <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative group shadow-lg shadow-black/40">
+                    <video 
+                      key={pipeline.videoUrl}
+                      controls 
+                      autoPlay={pipeline.completedChapters > 0}
+                      className="w-full h-full object-contain"
+                      referrerPolicy="no-referrer"
+                    >
+                      <source src={pipeline.videoUrl} type="video/mp4" />
+                      Your browser does not support the video tag.
+                    </video>
+                    {/* Minimalist Watermark overlay */}
+                    <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
+                      Media Render Active • 1080p
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center mt-2 px-1">
+                    <span className="text-[10px] font-mono text-slate-400">
+                      Synthesized Stream Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
+                    </span>
+                    <a 
+                      href={pipeline.videoUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-[10px] text-emerald-400 hover:underline font-mono"
+                    >
+                      Open Video ↗
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
+              </div>
+
+              {/* DUAL GATE APPROVAL THRESHOLD */}
+              {pipeline.waitingApproval && (
+                <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+                  <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+                    <AlertTriangle className="w-7 h-7 animate-pulse" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
+                    Human Authorization Threshold
+                  </h3>
+                  <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
+                    The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
+                  </p>
+                  
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={stopPipeline} 
+                      className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
+                    >
+                      Dismount
+                    </button>
+                    <button 
+                      onClick={approvePipeline} 
+                      className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
+                    >
+                      Sign off script <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* RIGHT PANE: Feature Matrix & Telemetry */}
-        <div className="w-1/2 flex flex-col bg-slate-900/20 min-w-0">
-          <div className="h-8 bg-slate-950 flex items-center px-4 border-b border-slate-800 shrink-0">
-            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">Right Pane: Diagnostic Telemetry</span>
+        {/* RIGHT PANE: Telemetry logs */}
+        <div className="w-[300px] shrink-0 border-l border-slate-800 flex flex-col bg-[#0b101f] select-text">
+          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center px-4 shrink-0">
+            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Terminal className="w-3.5 h-3.5 text-cyan-400" /> Pipeline Console
+            </span>
           </div>
 
-          <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden min-h-0">
-            {/* Live Log Stream */}
-            <div className="flex-1 flex flex-col border border-slate-800 rounded bg-slate-950 overflow-hidden min-h-0">
-              <div className="bg-slate-900 px-3 py-1.5 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase">Execution Console</span>
-              </div>
-              <div className="flex-1 p-3 overflow-y-auto text-[11px] font-mono space-y-2">
-                {logs.length === 0 ? (
-                  <span className="text-slate-600">System idle. Ready to parse PDF.</span>
-                ) : (
-                  logs.map((log, i) => (
-                    <div key={i} className="flex flex-col border-l-2 border-slate-800 pl-2 py-0.5">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-cyan-400 font-bold">[{log.feature}]</span>
-                        <span className={`font-bold uppercase ${getStatusColor(log.status)}`}>[{log.status}]</span>
-                      </div>
-                      <span className="text-slate-300 break-words">{log.message}</span>
-                    </div>
-                  ))
-                )}
-                <div ref={logsEndRef} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {/* SETTINGS MODAL */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 w-[400px]">
-            <h2 className="text-sm font-bold uppercase tracking-widest mb-4 text-emerald-400">API Configurations</h2>
-            
-            <label className="block text-[10px] text-slate-400 uppercase mb-1">Google Gemini Key</label>
-            <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded px-3 py-2 mb-4 text-xs focus:border-emerald-500 outline-none" />
-
-            <label className="block text-[10px] text-slate-400 uppercase mb-1">OpenAI Key (Optional)</label>
-            <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded px-3 py-2 mb-6 text-xs focus:border-emerald-500 outline-none" />
-
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-slate-200">CANCEL</button>
-              <button onClick={saveSettings} className="px-4 py-2 bg-emerald-500 text-slate-950 text-xs font-bold rounded">SAVE KEYS</button>
-            </div>
+          <div className="flex-1 p-4 overflow-y-auto text-[10.5px] font-mono space-y-3 min-h-0">
+            {logs.length === 0 ? (
+              <span className="text-slate-500 block leading-relaxed italic">
+                System idle inside port 3000 mapping layer. Ready to run textbook file. Select a book from the list and begin folder scan extraction.
+              </span>
+            ) : (
+              logs.map((log, i) => (
+                <div key={i} className="flex flex-col border-l-2 border-slate-700 pl-2 pb-0.5">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-cyan-400 font-semibold lowercase">
+                      [{log.feature}]
+                    </span>
+                    <span className={`${getStatusColor(log.status)} text-[9px] uppercase font-bold`}>
+                      [{log.status}]
+                    </span>
+                  </div>
+                  <span className="text-slate-300 break-words leading-relaxed">
+                    {log.message}
+                  </span>
+                </div>
+              ))
+            )}
+            <div ref={logsEndRef} />
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
-
