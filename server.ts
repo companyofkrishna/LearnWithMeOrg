@@ -68,6 +68,7 @@ let configStore = {
 interface ChapterResult {
   title: string;
   script: string;
+  summary?: string;
   videoUrl?: string;
   approved?: boolean;
   youtubeUrl?: string;
@@ -86,6 +87,7 @@ interface PipelineState {
   chaptersList: string[];
   videoUrl?: string;
   generatedChapters?: ChapterResult[];
+  activeAgent?: string;
 }
 
 let pipelineState: PipelineState = {
@@ -250,23 +252,25 @@ app.post("/api/youtube/upload", async (req, res) => {
   });
 
   // Simulate upload delay
-  const videoId = Math.random().toString(36).substring(2, 11);
-  const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
-  
-  if (chapter) {
-    chapter.uploading = false;
-    chapter.youtubeUrl = youtubeUrl;
-    broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
-  }
-
-  broadcast({
-    type: "LOG",
-    payload: {
-      feature: "YOUTUBE_PUBLISHER",
-      status: "VERIFIED SUCCESS",
-      message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
+  setTimeout(() => {
+    const videoId = Math.random().toString(36).substring(2, 11);
+    const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+    
+    if (chapter) {
+      chapter.uploading = false;
+      chapter.youtubeUrl = youtubeUrl;
+      broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
     }
-  });
+
+    broadcast({
+      type: "LOG",
+      payload: {
+        feature: "YOUTUBE_PUBLISHER",
+        status: "VERIFIED SUCCESS",
+        message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
+      }
+    });
+  }, 4000);
 
   res.json({ success: true, message: "Upload started" });
 });
@@ -331,7 +335,8 @@ app.post("/api/flow/run", async (req, res) => {
   res.json({ status: "started", book: targetName });
 });
 
-app.post("/api/flow/approve", (req, res) => {
+app.post("/api/flow/approve", express.json(), (req, res) => {
+  const tone = req.body.tone || "Professional";
   if (!pipelineState.isProcessing || !pipelineState.waitingApproval) {
     return res.status(400).json({ error: "Pipeline is not in a waiting state." });
   }
@@ -341,7 +346,7 @@ app.post("/api/flow/approve", (req, res) => {
   broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
 
   // Initiate Phase 2: Media Compilation & Publishing
-  resumePipeline();
+  resumePipeline(tone);
 
   res.json({ success: true });
 });
@@ -360,7 +365,8 @@ app.post("/api/flow/stop", (req, res) => {
   res.json({ success: true });
 });
 
-// Removed async sleep delay
+// Helper function to safely wait
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runPipeline(filePath: string, name: string) {
   try {
@@ -370,6 +376,8 @@ async function runPipeline(filePath: string, name: string) {
       status: "EXECUTING",
       message: `Analyzing document bounds for custom book file: ${name}`
     });
+
+    await delay(1000);
 
     const dataBuffer = fs.readFileSync(filePath);
     let fullText = "";
@@ -443,6 +451,8 @@ async function runPipeline(filePath: string, name: string) {
         message: `Scholar Agent is analyzing content mapping for [${title}]...`
       });
 
+      await delay(1500);
+
       // Call Gemini if key exists, otherwise use rich high-fidelity simulated response
       let summaryText = "";
       let hasKey = !!configStore.geminiKey;
@@ -482,6 +492,8 @@ async function runPipeline(filePath: string, name: string) {
         message: `Scriptwriter Agent is adapting educational outline for [${title}] into a video script...`
       });
 
+      await delay(1500);
+
       let scriptText = "";
       if (hasKey) {
         try {
@@ -509,6 +521,7 @@ async function runPipeline(filePath: string, name: string) {
       pipelineState.generatedChapters.push({
         title: title,
         script: scriptText,
+        summary: summaryText,
         videoUrl: chapterVideoUrl,
         approved: true
       });
@@ -522,6 +535,8 @@ async function runPipeline(filePath: string, name: string) {
         status: "EXECUTING",
         message: `Initiated Plagiarism Vector scanning. Running semantic transforms...`
       });
+
+      await delay(1000);
 
       broadcast({
         type: "TELEMETRY",
@@ -565,14 +580,16 @@ async function runPipeline(filePath: string, name: string) {
   }
 }
 
-async function resumePipeline() {
+async function resumePipeline(tone: string = "Professional") {
   try {
     broadcast({
       type: "TELEMETRY",
       feature: "MEDIA_SYNTH_ENGINE",
       status: "EXECUTING",
-      message: "Opening voiceover renderer engine. Generating speech vectors..."
+      message: `Opening voiceover renderer engine using [${tone}] tone. Generating speech vectors...`
     });
+
+    await delay(2000);
 
     broadcast({
       type: "TELEMETRY",
@@ -587,6 +604,8 @@ async function resumePipeline() {
       status: "EXECUTING",
       message: "Verifying publisher credentials. Refresh token authenticated."
     });
+
+    await delay(1500);
 
     broadcast({
       type: "TELEMETRY",
