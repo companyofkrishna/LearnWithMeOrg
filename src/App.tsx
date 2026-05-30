@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import CodeViewer from "./components/CodeViewer";
-import { ResponsiveContainer, AreaChart, Area } from "recharts";
+import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { 
   Database, 
   Terminal, 
@@ -24,7 +24,13 @@ import {
   Settings,
   Eye,
   EyeOff,
-  Activity
+  Activity,
+  Pause,
+  Maximize2,
+  VolumeX,
+  Music,
+  Radio,
+  BarChart2
 } from "lucide-react";
 
 // Books Type Definition
@@ -62,8 +68,45 @@ interface PipelineSession {
   paused: boolean;
 }
 
+// Analytics Mock Data
+const ANALYTICS_DATA = {
+  totalTokens: {
+    data: [
+      { day: "Mon", tokens: 120500 },
+      { day: "Tue", tokens: 180200 },
+      { day: "Wed", tokens: 250000 },
+      { day: "Thu", tokens: 220100 },
+      { day: "Fri", tokens: 305000 },
+      { day: "Sat", tokens: 410000 },
+      { day: "Sun", tokens: 380500 },
+    ],
+    total: "1.86M",
+  },
+  averageLatency: {
+    data: [
+      { stage: "Reader", latency: 4.2 },
+      { stage: "Scriptwriter", latency: 8.5 },
+      { stage: "Director", latency: 3.1 },
+      { stage: "Synthesis", latency: 12.4 },
+      { stage: "YouTube", latency: 2.3 },
+    ],
+  },
+  youtubeViews: {
+    data: [
+      { day: "Mon", views: 2400 },
+      { day: "Tue", views: 3500 },
+      { day: "Wed", views: 5100 },
+      { day: "Thu", views: 8900 },
+      { day: "Fri", views: 14200 },
+      { day: "Sat", views: 22500 },
+      { day: "Sun", views: 31000 },
+    ],
+    total: "87.6K",
+  }
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"workspace" | "codebase">("workspace");
+  const [activeTab, setActiveTab] = useState<"workspace" | "codebase" | "analytics">("workspace");
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [activeSession, setActiveSession] = useState<PipelineSession | null>(null);
@@ -86,6 +129,251 @@ export default function App() {
   const [customKeyInput, setCustomKeyInput] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+
+  // Interactive Media Preview Player states
+  const [activePreview, setActivePreview] = useState<{
+    bookTitle: string;
+    chapterNum: number;
+    scriptText: string;
+    bRollUrl: string;
+    isLiveSession: boolean;
+  } | null>(null);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [duration] = useState(25); // Simulated default duration
+  const [currentSpeechSentenceIdx, setCurrentSpeechSentenceIdx] = useState(0);
+  const [synthSoundTrack, setSynthSoundTrack] = useState(false);
+  const [volume, setVolume] = useState(0.8);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [isFullscreenCinema, setIsFullscreenCinema] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const droneOscsRef = useRef<OscillatorNode[]>([]);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const getCompletedChapterScript = (bookTitle: string, chapterNum: number) => {
+    const defaults: Record<string, string[]> = {
+      "The Art of War": [
+        "Welcome back. Chapter 1 outlines the supreme battle: Knowing yourself. In conflict, every maneuver must be computed before a single soldier takes the field. Victory is reserved for those who calculate depth beforehand.",
+        "Welcome back. Chapter 2 deconstructs the economics of battle. Long wars sap resources and breed mutiny. Sun Tzu tells us: seize your rival's supplies rather than burning them—energy is the vital resource.",
+        "Welcome back. Chapter 3 addresses attacking strategy. To win without fighting represents the pinnacle of strategic excellence. Shattering the enemy's spirit overrides shattering their physical defenses.",
+        "Welcome back. Chapter 5 focuses on strategic energy. Sun Tzu outlines how simple coordinates combine into boundless tactics. Direct force locks the enemy, while indirect force wins the campaign."
+      ],
+      "Meditations": [
+        "Today we explore stoicism in Chapter 1. Marcus Aurelius reminds us of gratitude—cataloging specific moral strengths he observed in loved ones. We learn to control attention, bypassing petty gossip.",
+        "Today we deconstruct Virtuous Action. What does not benefit the hive cannot benefit the bee. Align your morning mindset with civic obligation, and perform every task as if it were your last.",
+        "Welcome to stoic reflection. Chapter 3 calls us to cherish each fleeting hour. The health of a mind relies on pure intent, unperturbed by outer clamor or public approval.",
+        "Chapter 4 teaches that the soul creates its own retreat. Retiring into your quiet reason yields pristine serenity. The outer world is variable, but your internal fortress remains quiet."
+      ],
+      "The Odyssey": [
+        "Behold Chapter 1 of the grand epic. Athena appeals to Zeus for Odysseus, who remains captive on the island of Ogygia. The quest for home under cosmic sky marks the beginning of modern heroic adventure.",
+        "Chapter 2 shows Telemachus summoning the Ithacan assembly in grief. Seeking word of his long-lost father, he equips an exploration vessel, defying the greedy suitors who lay waste to his halls."
+      ],
+      "Principles of Economics": [
+        "Chapter 1 reviews the principles of choice. Individuals face tradeoffs: choosing one path relinquishes another. Rational agents evaluate marginal costs against marginal rewards.",
+        "Chapter 2 introduces supply and demand schedules. Markets seek equilibrium points where supply meets purchasing desire. Price acts as a signal guiding raw material distribution."
+      ]
+    };
+    const titleKey = bookTitle in defaults ? bookTitle : "The Art of War";
+    const bank = defaults[titleKey];
+    const idx = Math.abs(chapterNum - 1) % bank.length;
+    return bank[idx];
+  };
+
+  const getChapterBRollUrl = (bookTitle: string, chapterNum: number) => {
+    const urls = [
+      "https://assets.mixkit.co/videos/preview/mixkit-stars-in-space-background-1611-large.mp4",
+      "https://assets.mixkit.co/videos/preview/mixkit-continuous-writing-of-programming-code-on-a-screen-43024-large.mp4",
+      "https://assets.mixkit.co/videos/preview/mixkit-business-charts-and-graphs-analysis-41740-large.mp4",
+      "https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-lights-background-glow-31742-large.mp4"
+    ];
+    const hash = bookTitle.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0) + chapterNum;
+    const idx = Math.abs(hash) % urls.length;
+    return urls[idx];
+  };
+
+  const startAmbientSynth = () => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") {
+        ctx.resume();
+      }
+      stopAmbientSynth();
+
+      const masterGain = ctx.createGain();
+      masterGain.gain.setValueAtTime(0, ctx.currentTime);
+      masterGain.gain.linearRampToValueAtTime(0.08 * volume, ctx.currentTime + 1.0);
+      masterGain.connect(ctx.destination);
+      gainNodeRef.current = masterGain;
+
+      // Warm strategical chords based on clean sine and triangle waves inside the safe filter
+      const freqs = [110.0, 165.0, 220.0, 330.0];
+      droneOscsRef.current = freqs.map((freq, index) => {
+        const osc = ctx.createOscillator();
+        const filter = ctx.createBiquadFilter();
+        
+        osc.type = index % 2 === 0 ? "triangle" : "sine";
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        lfo.frequency.value = 0.2 + (index * 0.15);
+        lfoGain.gain.value = 1.5;
+        lfo.connect(lfoGain);
+        lfoGain.connect(osc.frequency);
+        lfo.start();
+        
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(450, ctx.currentTime);
+        
+        osc.connect(filter);
+        filter.connect(masterGain);
+        
+        osc.start();
+        return osc;
+      });
+    } catch (e) {
+      console.warn("Failed synth audio engine boot:", e);
+    }
+  };
+
+  const stopAmbientSynth = () => {
+    droneOscsRef.current.forEach(osc => {
+      try { osc.stop(); } catch {}
+    });
+    droneOscsRef.current = [];
+    if (gainNodeRef.current) {
+      try { gainNodeRef.current.disconnect(); } catch {}
+      gainNodeRef.current = null;
+    }
+  };
+
+  const speakSentence = (index: number) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    if (!activePreview || !isPlaying) return;
+
+    const sentences = activePreview.scriptText.split(".").map(s => s.trim()).filter(Boolean);
+    if (sentences.length === 0 || index >= sentences.length) {
+      setIsPlaying(false);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(sentences[index]);
+    const voices = window.speechSynthesis.getVoices();
+    const voice = voices.find(v => v.lang.startsWith("en-") && v.name.includes("Google")) || 
+                  voices.find(v => v.lang.startsWith("en-") && v.name.includes("Natural")) ||
+                  voices.find(v => v.lang.startsWith("en-")) || 
+                  voices[0];
+    if (voice) {
+      utterance.voice = voice;
+    }
+    
+    utterance.rate = 1.05 * playbackRate;
+    utterance.pitch = 0.95;
+    utterance.volume = volume;
+
+    utterance.onend = () => {
+      if (index + 1 < sentences.length) {
+        setCurrentSpeechSentenceIdx(index + 1);
+      } else {
+        setIsPlaying(false);
+        setCurrentSpeechSentenceIdx(0);
+        setPlaybackTime(0);
+      }
+    };
+
+    utterance.onerror = () => {
+      setIsPlaying(false);
+    };
+
+    speechUtteranceRef.current = utterance;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Sync play state
+  useEffect(() => {
+    if (isPlaying && activePreview) {
+      speakSentence(currentSpeechSentenceIdx);
+      if (synthSoundTrack) {
+        startAmbientSynth();
+      }
+      if (videoRef.current) {
+        videoRef.current.playbackRate = playbackRate;
+        videoRef.current.play().catch(() => {});
+      }
+    } else {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      stopAmbientSynth();
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+    }
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      stopAmbientSynth();
+    };
+  }, [isPlaying, currentSpeechSentenceIdx, activePreview?.scriptText, playbackRate]);
+
+  // Adjust volume
+  useEffect(() => {
+    if (gainNodeRef.current && audioCtxRef.current) {
+      gainNodeRef.current.gain.setValueAtTime(isPlaying && synthSoundTrack ? 0.08 * volume : 0, audioCtxRef.current.currentTime);
+    }
+  }, [isPlaying, synthSoundTrack, volume]);
+
+  // Handle play duration progress bar slider
+  useEffect(() => {
+    let interval: any = null;
+    if (isPlaying) {
+      interval = setInterval(() => {
+        setPlaybackTime(prev => {
+          if (prev >= duration) {
+            setIsPlaying(false);
+            setCurrentSpeechSentenceIdx(0);
+            return 0;
+          }
+          return Number((prev + 0.1).toFixed(1));
+        });
+      }, 100);
+    } else {
+      if (interval) clearInterval(interval);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isPlaying, duration]);
+
+  // Keep live synthesis outputs synced as they arrive in activeSession
+  useEffect(() => {
+    if (activeSession && activeSession.scriptText) {
+      const bookObj = books.find(b => b.id === activeSession.bookId);
+      const bRoll = activeSession.bRollLocalClips?.[0] || "https://assets.mixkit.co/videos/preview/mixkit-business-charts-and-graphs-analysis-41740-large.mp4";
+      
+      setActivePreview({
+        bookTitle: bookObj?.title || "Active Textbook compilation",
+        chapterNum: activeSession.activeChapter,
+        scriptText: activeSession.scriptText,
+        bRollUrl: bRoll,
+        isLiveSession: true
+      });
+    }
+  }, [activeSession?.scriptText, activeSession?.activeChapter, activeSession?.step]);
+
+  // Sync internal caption idx with speech speech synthesis sentences
+  useEffect(() => {
+    setCurrentCaptionIdx(currentSpeechSentenceIdx);
+  }, [currentSpeechSentenceIdx]);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -160,8 +448,9 @@ export default function App() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  // Synchronize playing dynamic subtitle loops when B-Roll/Avatar preview script exists
+  // Synchronize playing dynamic subtitle loops when B-Roll/Avatar preview script exists and player is not active
   useEffect(() => {
+    if (isPlaying) return; // Handed off to voice speech synthesis system for extreme precision
     if (!activeSession || !activeSession.scriptText) {
       setCurrentCaptionIdx(0);
       return;
@@ -175,7 +464,7 @@ export default function App() {
     }, 4500);
 
     return () => clearInterval(interval);
-  }, [activeSession?.scriptText]);
+  }, [activeSession?.scriptText, isPlaying]);
 
   const fetchBooks = async () => {
     try {
@@ -435,13 +724,13 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070a13] text-slate-100 selection:bg-emerald-500/20 selection:text-emerald-300">
+    <div className="h-screen flex flex-col bg-[#070a13] text-slate-100 selection:bg-emerald-500/20 selection:text-emerald-300 overflow-hidden">
       
       {/* Decorative Top Accent Light Beam */}
       <div className="absolute top-0 left-1/4 right-1/4 h-[1px] bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
 
       {/* Primary Workspace Header */}
-      <header className="border-b border-slate-800/80 bg-slate-950/40 backdrop-blur px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <header className="shrink-0 border-b border-slate-800/80 bg-slate-950/40 backdrop-blur px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-cyan-600 p-0.5 flex items-center justify-center shadow-lg shadow-emerald-500/10">
@@ -488,6 +777,18 @@ export default function App() {
               <Code className="w-3.5 h-3.5" />
               <span>Python Code</span>
             </button>
+            <button
+              id="tab-btn-analytics"
+              onClick={() => setActiveTab("analytics")}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md font-sans text-xs font-semibold tracking-wide uppercase transition-all ${
+                activeTab === "analytics"
+                  ? "bg-slate-800 text-emerald-400 font-bold shadow-md"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+              <span>Analytics</span>
+            </button>
           </div>
 
           {/* WebSocket Status Indicator */}
@@ -515,10 +816,113 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="p-6 max-w-7xl mx-auto">
+      <main className="p-6 max-w-7xl w-full mx-auto flex-1 overflow-y-auto">
         
         {activeTab === "codebase" ? (
           <CodeViewer />
+        ) : activeTab === "analytics" ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            {/* Tokens Consumed Area Chart */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg lg:col-span-2">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-sm font-sans font-bold text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                    <Database className="w-4 h-4 text-emerald-400" />
+                    Total Tokens Consumed
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">Aggregated LLM token usage across all crew runs.</p>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold font-mono text-emerald-400">{ANALYTICS_DATA.totalTokens.total}</div>
+                  <div className="text-[10px] uppercase text-slate-500">Total Tokens</div>
+                </div>
+              </div>
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={ANALYTICS_DATA.totalTokens.data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorTokens" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="day" stroke="#475569" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#475569" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `${val / 1000}k`} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f1f5f9', borderRadius: '8px' }}
+                      itemStyle={{ color: '#10b981' }}
+                    />
+                    <Area type="monotone" dataKey="tokens" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorTokens)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Average Latency Bar Chart */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col">
+              <div className="mb-6">
+                <h3 className="text-sm font-sans font-bold text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-500" />
+                  Average Latency (s)
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Stage compilation time averages.</p>
+              </div>
+              <div className="flex-1 h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ANALYTICS_DATA.averageLatency.data} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={true} vertical={false} />
+                    <XAxis type="number" stroke="#475569" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis dataKey="stage" type="category" stroke="#475569" fontSize={12} tickLine={false} axisLine={false} />
+                    <Tooltip 
+                      cursor={{fill: '#1e293b', opacity: 0.4}}
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f1f5f9', borderRadius: '8px' }}
+                    />
+                    <Bar dataKey="latency" fill="#f59e0b" radius={[0, 4, 4, 0]} barSize={24} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* YouTube Views Area Chart */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg flex flex-col">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-sm font-sans font-bold text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                    <Youtube className="w-4 h-4 text-rose-500" />
+                    YouTube Views
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">Video performance metrics.</p>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold font-mono text-rose-500">{ANALYTICS_DATA.youtubeViews.total}</div>
+                  <div className="text-[10px] uppercase text-slate-500">Total</div>
+                </div>
+              </div>
+              <div className="flex-1 h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={ANALYTICS_DATA.youtubeViews.data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorViews" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="day" stroke="#475569" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#475569" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `${val / 1000}k`} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f1f5f9', borderRadius: '8px' }}
+                      itemStyle={{ color: '#f43f5e' }}
+                    />
+                    <Area type="monotone" dataKey="views" stroke="#f43f5e" strokeWidth={3} fillOpacity={1} fill="url(#colorViews)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+          </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
 
@@ -950,40 +1354,289 @@ export default function App() {
 
                 {/* Content body depending on Active State */}
                 {!activeSession ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-4 border border-dashed border-slate-800 rounded-xl bg-slate-950/20 my-4 select-none">
-                    <Clock className="w-8 h-8 text-slate-700 mb-2.5 animate-pulse" />
-                    <h4 className="text-xs font-sans font-semibold text-slate-400 uppercase tracking-wide">
-                      No Session Running
-                    </h4>
-                    
-                    {selectedBook ? (
-                      <div className="mt-4 w-full">
-                        <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3 text-left">
-                          <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">SELECTED QUEUE RECORD:</div>
-                          <div className="text-xs font-bold font-sans text-slate-200 mt-0.5">{selectedBook.title}</div>
-                          <p className="text-[10px] text-slate-400 mt-1 leading-normal">{selectedBook.description}</p>
-                          
-                          <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-800/50 text-[10px] font-mono">
-                            <div>Chapters: <span className="text-slate-200">{selectedBook.totalChapters}</span></div>
-                            <div>Completed: <span className="text-emerald-400">{selectedBook.chaptersCompleted}</span></div>
-                          </div>
+                  activePreview ? (
+                    <div className="flex-1 flex flex-col justify-between min-h-0 py-2">
+                      <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center justify-between mb-3 text-xs">
+                        <div>
+                          <span className="text-[10px] font-mono text-slate-500 uppercase">PREVIEWING CHAPTER COMPILATION:</span>
+                          <div className="font-bold font-sans text-slate-200 text-xs truncate">Ch {activePreview.chapterNum} — {activePreview.bookTitle}</div>
                         </div>
-
                         <button
-                          id="trigger-pipeline-btn"
-                          onClick={() => bootPipelineFlow(selectedBook.id)}
-                          className="w-full mt-4 flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 active:scale-95 text-slate-950 font-sans font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer transition-all shadow-lg hover:shadow-emerald-500/10"
+                          type="button"
+                          onClick={() => {
+                            setActivePreview(null);
+                            setIsPlaying(false);
+                            setPlaybackTime(0);
+                            setCurrentSpeechSentenceIdx(0);
+                          }}
+                          className="text-[10px] uppercase font-mono font-bold text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
                         >
-                          <Play className="w-4 h-4" />
-                          <span>Start CrewAI Flows</span>
+                          [Close Player]
                         </button>
                       </div>
-                    ) : (
-                      <p className="text-[10px] text-slate-500 mt-2 px-2">
-                        Add a textbook layout or choose a baseline book inside SQLite to explore.
-                      </p>
-                    )}
-                  </div>
+
+                      <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-y-auto pr-1">
+                        {/* Audio-Video Studio Player View */}
+                        {(() => {
+                          const sentences = activePreview.scriptText.split(".").map(s => s.trim()).filter(Boolean);
+                          const currentSentenceText = sentences[currentCaptionIdx] || activePreview.scriptText;
+                          const eqBars = isPlaying ? [16, 28, 12, 35, 20, 42, 8, 24, 30, 15, 18, 32, 10, 26, 20, 35, 14, 28] : [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+                          return (
+                            <div className="space-y-4">
+                              <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-2xl relative aspect-video flex flex-col justify-end items-center group/player">
+                                <video
+                                  ref={videoRef}
+                                  src={activePreview.bRollUrl}
+                                  className="absolute inset-0 w-full h-full object-cover z-0 opacity-70"
+                                  loop
+                                  muted
+                                  playsInline
+                                />
+                                {isPlaying && (
+                                  <div className="absolute right-4 top-4 z-10 w-11 h-11 rounded-full border border-emerald-500/50 bg-emerald-500/10 backdrop-blur-sm flex items-center justify-center animate-pulse overflow-hidden">
+                                    <span className="absolute inset-1 rounded-full border border-dashed border-emerald-500/30 animate-spin" />
+                                    <Cpu className="w-5 h-5 text-emerald-400 animate-bounce" />
+                                  </div>
+                                )}
+                                <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-800 rounded px-2.5 py-1 text-[9px] font-mono text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                  <span>AV STUDIO PREVIEW: CHAPTER {activePreview.chapterNum}</span>
+                                </div>
+                                <div className="absolute top-10 left-3 z-10 bg-slate-900/60 backdrop-blur-sm border border-slate-800/50 rounded px-2 py-1 text-[8px] font-mono text-slate-300 flex items-center gap-2 uppercase tracking-wide">
+                                  <span>1080p</span>
+                                  <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                                  <span>AVC/H.264</span>
+                                  <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                                  <span>{(24.5 + activePreview.chapterNum * 2.1).toFixed(1)} MB</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsFullscreenCinema(true)}
+                                  className="absolute top-3 right-3 z-10 bg-slate-900/80 hover:bg-slate-800 border border-slate-850 rounded p-1.5 text-slate-300 hover:text-emerald-400 cursor-pointer opacity-0 group-hover/player:opacity-100 transition-opacity"
+                                  title="Open Cinema Mode"
+                                >
+                                  <Maximize2 className="w-3.5 h-3.5" />
+                                </button>
+                                {!isPlaying && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setIsPlaying(true);
+                                      if (audioCtxRef.current?.state === "suspended") {
+                                        audioCtxRef.current.resume();
+                                      }
+                                    }}
+                                    className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-slate-900/90 border border-slate-705 text-emerald-400 flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-10 hover:border-emerald-500/55 cursor-pointer shadow-lg"
+                                  >
+                                    <Play className="w-5 h-5 ml-0.5 fill-current" />
+                                  </button>
+                                )}
+                                <div className="absolute bottom-4 left-3 right-3 z-10 bg-slate-950/85 backdrop-blur-md border border-slate-850 rounded-xl p-3 text-center min-h-[50px] flex items-center justify-center shadow-lg">
+                                  <p className="text-[11px] font-sans text-slate-100 font-bold leading-normal tracking-wide select-text">
+                                    {currentSentenceText}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="bg-slate-950/80 border border-slate-850 rounded-xl p-3.5 space-y-3.5 select-none shadow">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[9px] font-mono text-slate-500 w-6">
+                                    0:{playbackTime.toFixed(0).padStart(2, '0')}
+                                  </span>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max={duration}
+                                    step="0.1"
+                                    value={playbackTime}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value);
+                                      setPlaybackTime(val);
+                                      if (sentences.length > 0) {
+                                        const targetIdx = Math.min(sentences.length - 1, Math.floor((val / duration) * sentences.length));
+                                        setCurrentSpeechSentenceIdx(targetIdx);
+                                      }
+                                    }}
+                                    className="flex-1 accent-emerald-500 bg-slate-800 h-1 rounded-lg cursor-pointer focus:outline-none"
+                                  />
+                                  <span className="text-[9px] font-mono text-slate-500 w-6">
+                                    0:{duration}
+                                  </span>
+                                </div>
+
+                                <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsPlaying(!isPlaying)}
+                                      className="p-2 rounded-lg bg-slate-900 border border-slate-850 hover:border-emerald-500/40 text-emerald-400 transition-all cursor-pointer shadow"
+                                      title={isPlaying ? "Pause summary" : "Play vocal short video representation"}
+                                    >
+                                      {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsPlaying(false);
+                                        setPlaybackTime(0);
+                                        setCurrentSpeechSentenceIdx(0);
+                                      }}
+                                      className="p-1 px-2.5 rounded-lg border border-slate-850 hover:bg-slate-900 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono cursor-pointer"
+                                    >
+                                      Restart
+                                    </button>
+                                    <select
+                                      value={playbackRate}
+                                      onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
+                                      className="bg-slate-900 border border-slate-850 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono rounded-lg px-1 py-1 h-[26px] cursor-pointer focus:outline-none focus:border-emerald-500/50"
+                                      title="Playback speed"
+                                    >
+                                      <option value={0.5}>0.5x</option>
+                                      <option value={1}>1.0x</option>
+                                      <option value={2}>2.0x</option>
+                                    </select>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 h-5 overflow-hidden w-20">
+                                    {eqBars.map((h, i) => (
+                                      <div
+                                        key={i}
+                                        className="w-1 bg-emerald-500/85 rounded transition-all duration-300"
+                                        style={{ height: `${h}%` }}
+                                      />
+                                    ))}
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSynthSoundTrack(!synthSoundTrack)}
+                                      className={`p-1.5 rounded-lg border flex items-center gap-1.5 text-[10px] uppercase font-mono font-bold transition-all cursor-pointer ${
+                                        synthSoundTrack
+                                          ? "bg-purple-500/15 border-purple-500/40 text-purple-400 font-bold"
+                                          : "bg-slate-900/40 border-slate-855 text-slate-500 hover:text-slate-350"
+                                      }`}
+                                      title="Toggle atmospheric synthesizer chord"
+                                    >
+                                      <Music className="w-3.5 h-3.5" />
+                                      <span>Synth Drone</span>
+                                    </button>
+
+                                    <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-850 rounded-lg px-2 py-1.5">
+                                      <Volume2 className="w-3.5 h-3.5 text-slate-400" />
+                                      <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={volume}
+                                        onChange={(e) => setVolume(parseFloat(e.target.value))}
+                                        className="w-12 bg-slate-800 accent-emerald-500 h-1 rounded cursor-pointer"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-900 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                                  <div className="flex items-center gap-1.5">
+                                    <Radio className="w-3 h-3 text-emerald-400" />
+                                    <span>Source: Standard Narrative synthesized voice</span>
+                                  </div>
+                                  <div>
+                                    Sentences: <span className="text-slate-350 font-bold">{currentSpeechSentenceIdx + 1}/{sentences.length}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Interactive script draft content display */}
+                        <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex-1 flex flex-col justify-between overflow-hidden min-h-[140px]">
+                          <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block border-b border-slate-900 pb-1.5 mb-2 font-bold">Composed Script Text</span>
+                          <div className="flex-grow overflow-y-auto max-h-[140px] text-[11px] font-mono text-slate-300 leading-relaxed pr-1 whitespace-pre-wrap select-text">
+                            {activePreview.scriptText}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col justify-between min-h-0 my-4 select-none">
+                      <div className="flex-1 flex flex-col items-center justify-center text-center p-4 border border-dashed border-slate-805 rounded-xl bg-slate-950/20 my-1 overflow-y-auto max-h-[360px] scrollbar-thin">
+                        <Clock className="w-8 h-8 text-slate-700 mb-2.5" />
+                        <h4 className="text-xs font-sans font-bold text-slate-400 uppercase tracking-wide">
+                          No Session Running
+                        </h4>
+                        
+                        {selectedBook ? (
+                          <div className="mt-4 w-full">
+                            <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3 text-left">
+                              <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">SELECTED QUEUE RECORD:</div>
+                              <div className="text-xs font-bold font-sans text-slate-200 mt-0.5">{selectedBook.title}</div>
+                              <p className="text-[10px] text-slate-400 mt-1 leading-normal">{selectedBook.description}</p>
+                              
+                              <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-800/50 text-[10px] font-mono">
+                                <div>Chapters: <span className="text-slate-200">{selectedBook.totalChapters}</span></div>
+                                <div>Completed: <span className="text-emerald-400">{selectedBook.chaptersCompleted}</span></div>
+                              </div>
+                            </div>
+
+                            {/* Completed Chapter Media list indicators */}
+                            {selectedBook.chaptersCompleted > 0 && (
+                              <div className="mt-4 bg-slate-950/50 border border-slate-800/60 rounded-xl p-3 text-left">
+                                <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest block mb-1.5 font-bold">🎬 PLAY COMPILATION SHORT:</span>
+                                <div className="space-y-1 block max-h-[120px] overflow-y-auto pr-1">
+                                  {Array.from({ length: selectedBook.chaptersCompleted }).map((_, idx) => {
+                                    const chapNum = idx + 1;
+                                    const scriptText = getCompletedChapterScript(selectedBook.title, chapNum);
+                                    const bRollUrl = getChapterBRollUrl(selectedBook.title, chapNum);
+                                    return (
+                                      <button
+                                        key={chapNum}
+                                        type="button"
+                                        onClick={() => {
+                                          setActivePreview({
+                                            bookTitle: selectedBook.title,
+                                            chapterNum: chapNum,
+                                            scriptText,
+                                            bRollUrl,
+                                            isLiveSession: false
+                                          });
+                                          setIsPlaying(true);
+                                          setPlaybackTime(0);
+                                          setCurrentSpeechSentenceIdx(0);
+                                        }}
+                                        className="w-full flex items-center justify-between p-1.5 rounded bg-slate-900 border border-slate-850 hover:border-emerald-500/40 hover:bg-slate-800 text-left transition-all text-xs font-medium cursor-pointer group/line"
+                                      >
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <Tv className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                          <span className="truncate text-slate-350 group-hover/line:text-slate-150">Ch {chapNum} lecture video</span>
+                                        </div>
+                                        <Play className="w-3 h-3 text-slate-500 group-hover/line:text-emerald-400 fill-current" />
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            <button
+                              id="trigger-pipeline-btn"
+                              onClick={() => bootPipelineFlow(selectedBook.id)}
+                              className="w-full mt-4 flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 active:scale-95 text-slate-950 font-sans font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer transition-all shadow-lg"
+                            >
+                              <Play className="w-4 h-4" />
+                              <span>Start CrewAI Flows</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-slate-500 mt-2 px-2">
+                            Add a textbook layout or choose a baseline book inside SQLite to explore.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
                 ) : (
                   <div className="flex-1 flex flex-col justify-between min-h-0 py-2">
                     
@@ -999,70 +1652,201 @@ export default function App() {
                     {/* Output script review */}
                     <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-y-auto pr-1">
                       
-                      {/* Subtitles & Talking Avatar Player mock visual card */}
-                      <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col relative aspect-video justify-center items-center">
-                        
-                        {/* Background B-Roll stock visual simulator */}
-                        <div className="absolute inset-0 bg-slate-900/90 z-0 flex items-center justify-center font-mono text-[9px] text-slate-500 select-none overflow-hidden uppercase">
-                          {activeSession.step === "MEDIA_SYNTHESIZER" || activeSession.step === "WAITING_APPROVAL" || activeSession.step === "PUBLISHING_ACTIVE" || activeSession.step === "PIPELINE_SUCCESS" ? (
-                            <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center">
-                              {/* Pulse circle talking avatar layout animation */}
-                              <div className="w-14 h-14 rounded-full border border-emerald-500/30 flex items-center justify-center relative bg-emerald-500/5 animate-pulse">
-                                <span className="absolute inset-0.5 rounded-full border border-dashed border-emerald-500/10 animate-spin" />
-                                <span className={`w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center ${activeSession.paused ? "" : "animate-bounce"}`}>
-                                  <Cpu className="w-4 h-4 text-emerald-400" />
-                                </span>
+                      {activeSession.step === "MEDIA_SYNTHESIZER" || activeSession.step === "WAITING_APPROVAL" || activeSession.step === "PUBLISHING_ACTIVE" || activeSession.step === "PIPELINE_SUCCESS" ? (
+                        activePreview ? (
+                          (() => {
+                            const sentences = activePreview.scriptText.split(".").map(s => s.trim()).filter(Boolean);
+                            const currentSentenceText = sentences[currentCaptionIdx] || activePreview.scriptText;
+                            const eqBars = isPlaying ? [16, 28, 12, 35, 20, 42, 8, 24, 30, 15, 18, 32, 10, 26, 20, 35, 14, 28] : [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+                            return (
+                              <div className="space-y-4">
+                                <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-2xl relative aspect-video flex flex-col justify-end items-center group/player">
+                                  <video
+                                    ref={videoRef}
+                                    src={activePreview.bRollUrl}
+                                    className="absolute inset-0 w-full h-full object-cover z-0 opacity-70"
+                                    loop
+                                    muted
+                                    playsInline
+                                  />
+                                  {isPlaying && (
+                                    <div className="absolute right-4 top-4 z-10 w-11 h-11 rounded-full border border-emerald-500/50 bg-emerald-500/10 backdrop-blur-sm flex items-center justify-center animate-pulse overflow-hidden">
+                                      <span className="absolute inset-1 rounded-full border border-dashed border-emerald-500/30 animate-spin" />
+                                      <Cpu className="w-5 h-5 text-emerald-400 animate-bounce" />
+                                    </div>
+                                  )}
+                                  <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-800 rounded px-2.5 py-1 text-[9px] font-mono text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                                    <span>AV STUDIO PREVIEW: CHAPTER {activePreview.chapterNum}</span>
+                                  </div>
+                                  <div className="absolute top-10 left-3 z-10 bg-slate-900/60 backdrop-blur-sm border border-slate-800/50 rounded px-2 py-1 text-[8px] font-mono text-slate-300 flex items-center gap-2 uppercase tracking-wide">
+                                    <span>1080p</span>
+                                    <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                                    <span>AVC/H.264</span>
+                                    <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                                    <span>{(24.5 + activePreview.chapterNum * 2.1).toFixed(1)} MB</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsFullscreenCinema(true)}
+                                    className="absolute top-3 right-3 z-10 bg-slate-900/80 hover:bg-slate-800 border border-slate-850 rounded p-1.5 text-slate-300 hover:text-emerald-400 cursor-pointer opacity-0 group-hover/player:opacity-100 transition-opacity"
+                                    title="Open Cinema Mode"
+                                  >
+                                    <Maximize2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  {!isPlaying && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsPlaying(true);
+                                        if (audioCtxRef.current?.state === "suspended") {
+                                          audioCtxRef.current.resume();
+                                        }
+                                      }}
+                                      className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-slate-900/90 border border-slate-705 text-emerald-400 flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-10 hover:border-emerald-500/55 cursor-pointer shadow-lg"
+                                    >
+                                      <Play className="w-5 h-5 ml-0.5 fill-current" />
+                                    </button>
+                                  )}
+                                  <div className="absolute bottom-4 left-3 right-3 z-10 bg-slate-950/85 backdrop-blur-md border border-slate-850 rounded-xl p-3 text-center min-h-[50px] flex items-center justify-center shadow-lg">
+                                    <p className="text-[11px] font-sans text-slate-100 font-bold leading-normal tracking-wide select-text">
+                                      {currentSentenceText}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="bg-slate-950/80 border border-slate-850 rounded-xl p-3.5 space-y-3.5 select-none shadow">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-mono text-slate-500 w-6">
+                                      0:{playbackTime.toFixed(0).padStart(2, '0')}
+                                    </span>
+                                    <input
+                                      type="range"
+                                      min="0"
+                                      max={duration}
+                                      step="0.1"
+                                      value={playbackTime}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        setPlaybackTime(val);
+                                        if (sentences.length > 0) {
+                                          const targetIdx = Math.min(sentences.length - 1, Math.floor((val / duration) * sentences.length));
+                                          setCurrentSpeechSentenceIdx(targetIdx);
+                                        }
+                                      }}
+                                      className="flex-1 accent-emerald-500 bg-slate-800 h-1 rounded-lg cursor-pointer focus:outline-none"
+                                    />
+                                    <span className="text-[9px] font-mono text-slate-500 w-6">
+                                      0:{duration}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setIsPlaying(!isPlaying)}
+                                        className="p-2 rounded-lg bg-slate-900 border border-slate-850 hover:border-emerald-500/40 text-emerald-400 transition-all cursor-pointer shadow"
+                                        title={isPlaying ? "Pause summary" : "Play vocal short video representation"}
+                                      >
+                                        {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setIsPlaying(false);
+                                          setPlaybackTime(0);
+                                          setCurrentSpeechSentenceIdx(0);
+                                        }}
+                                        className="p-1 px-2.5 rounded-lg border border-slate-850 hover:bg-slate-900 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono cursor-pointer"
+                                      >
+                                        Restart
+                                      </button>
+                                      <select
+                                        value={playbackRate}
+                                        onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
+                                        className="bg-slate-900 border border-slate-850 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono rounded-lg px-1 py-1 h-[26px] cursor-pointer focus:outline-none focus:border-emerald-500/50"
+                                        title="Playback speed"
+                                      >
+                                        <option value={0.5}>0.5x</option>
+                                        <option value={1}>1.0x</option>
+                                        <option value={2}>2.0x</option>
+                                      </select>
+                                    </div>
+
+                                    <div className="flex items-center gap-1 h-5 overflow-hidden w-20">
+                                      {eqBars.map((h, i) => (
+                                        <div
+                                          key={i}
+                                          className="w-1 bg-emerald-500/85 rounded transition-all duration-300"
+                                          style={{ height: `${h}%` }}
+                                        />
+                                      ))}
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setSynthSoundTrack(!synthSoundTrack)}
+                                        className={`p-1.5 rounded-lg border flex items-center gap-1.5 text-[10px] uppercase font-mono font-bold transition-all cursor-pointer ${
+                                          synthSoundTrack
+                                            ? "bg-purple-500/15 border-purple-500/40 text-purple-400 font-bold"
+                                            : "bg-slate-900/40 border-slate-855 text-slate-500 hover:text-slate-350"
+                                        }`}
+                                        title="Toggle atmospheric synthesizer chord"
+                                      >
+                                        <Music className="w-3.5 h-3.5" />
+                                        <span>Synth Drone</span>
+                                      </button>
+
+                                      <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-850 rounded-lg px-2 py-1.5">
+                                        <Volume2 className="w-3.5 h-3.5 text-slate-400" />
+                                        <input
+                                          type="range"
+                                          min="0"
+                                          max="1"
+                                          step="0.05"
+                                          value={volume}
+                                          onChange={(e) => setVolume(parseFloat(e.target.value))}
+                                          className="w-12 bg-slate-800 accent-emerald-500 h-1 rounded cursor-pointer"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-900 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                                    <div className="flex items-center gap-1.5">
+                                      <Radio className="w-3 h-3 text-emerald-400" />
+                                      <span>Source: Standard Narrative synthesized voice</span>
+                                    </div>
+                                    <div>
+                                      Sentences: <span className="text-slate-350 font-bold">{currentSpeechSentenceIdx + 1}/{sentences.length}</span>
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
-                              <span className="text-[10px] text-slate-400 uppercase font-sans mt-2.5 font-bold tracking-tight">AI LECTURER AVATAR ACTIVE</span>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center gap-1">
-                              <RefreshCw className="w-5 h-5 text-slate-700 animate-spin" />
-                              <span>Compiling video canvas...</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Centered Captions overlay block */}
-                        {activeSession.scriptText && (
-                          <div className="absolute bottom-2 left-2 right-2 z-10 bg-slate-950/80 backdrop-blur-sm border border-slate-800 rounded px-2.5 py-1.5 min-h-[40px] flex items-center justify-center text-center">
-                            <p className="text-[10px] font-sans text-slate-100 font-bold leading-normal">
-                              {activeSession.scriptText.split(".").map(s=>s.trim()).filter(Boolean)[currentCaptionIdx] || activeSession.scriptText}
-                            </p>
+                            );
+                          })()
+                        ) : (
+                          <div className="bg-slate-950 px-4 py-8 rounded-xl border border-slate-800 flex flex-col items-center justify-center text-center">
+                            <span className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 mb-2.5 animate-pulse">
+                              <Cpu className="w-5 h-5" />
+                            </span>
+                            <span className="text-xs font-semibold text-slate-300">Formulating Narrative & Media Layout...</span>
+                            <span className="text-[10px] text-slate-500 mt-1 font-mono">CrewAI Agent Workflow processing content</span>
                           </div>
-                        )}
-
-                        {/* Top Accent Category Badge */}
-                        <div className="absolute top-2 left-2 z-10 bg-slate-950/60 border border-slate-800 rounded px-1.5 py-0.5 text-[8.5px] font-mono text-slate-400 tracking-wider">
-                          PREVIEW PLATFORM
+                        )
+                      ) : (
+                        <div className="bg-slate-950 px-4 py-8 rounded-xl border border-slate-800 flex flex-col items-center justify-center text-center">
+                          <RefreshCw className="w-6 h-6 text-emerald-400 animate-spin mb-2.5" />
+                          <span className="text-xs font-semibold text-slate-300">Reading PDF Textbook Contents...</span>
+                          <span className="text-[10px] text-slate-500 mt-1 font-mono">Current state: {activeSession.step}</span>
                         </div>
-                      </div>
-
-                      {/* Calculated TTS Waveform Visualizer */}
-                      <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center gap-3">
-                        <Volume2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block">Voice Generation Track</span>
-                          
-                          {/* Animated SVG wave simulator */}
-                          <div className="h-6 flex items-center gap-[3px] mt-1 overflow-hidden">
-                            {[12, 18, 8, 22, 14, 25, 4, 16, 20, 10, 12, 24, 6, 18, 14, 22, 8, 16, 12, 20, 4, 14, 18, 8, 20].map((h, i) => (
-                              <div
-                                key={i}
-                                className="w-[3px] bg-emerald-500 rounded-full transition-all duration-300"
-                                style={{
-                                  height: `${activeSession.paused ? Math.max(3, h - 8) : h}%`,
-                                  opacity: activeSession.paused ? 0.3 : 0.8
-                                }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
+                      )}
 
                       {/* Interactive script draft content display */}
-                      <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex-1 flex flex-col justify-between overflow-hidden">
-                        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block border-b border-slate-900 pb-1.5 mb-2">Copyright Safe Script</span>
+                      <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl flex-1 flex flex-col justify-between overflow-hidden min-h-[120px]">
+                        <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block border-b border-slate-900 pb-1.5 mb-2 font-bold">Copyright Safe Script</span>
                         <div className="flex-grow overflow-y-auto max-h-[140px] text-[11px] font-mono text-slate-300 leading-relaxed pr-1 whitespace-pre-wrap select-text">
                           {activeSession.scriptText ? (
                             activeSession.scriptText
@@ -1303,31 +2087,7 @@ export default function App() {
                   <option value="gemini-3.5-flash">Gemini 3.5 Flash (Preview)</option>
                 </select>
               </div>
-
-              {/* SIMULATION SPEED */}
-              <div>
-                <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5 flex justify-between">
-                  <span>Simulation speed multiplier</span>
-                  <span className="text-emerald-400 font-bold">{settings.simulationSpeed}x Pace</span>
-                </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {[1, 2, 4, 8].map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setSettings({ ...settings, simulationSpeed: s })}
-                      className={`py-1.5 rounded-lg text-xs font-mono font-semibold transition-all border cursor-pointer ${
-                        settings.simulationSpeed === s
-                          ? "bg-emerald-500/15 border-emerald-500 text-emerald-400 shadow shadow-emerald-500/10"
-                          : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      {s === 1 ? "1x (Normal)" : `${s}x`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
+              
               {/* AUTO-APPROVE (AUTO AUDIT BYPASS) */}
               <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
                 <div className="pr-3">
@@ -1374,6 +2134,221 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {isFullscreenCinema && activePreview && (
+        <div id="cinema-preview-modal" className="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-50 flex flex-col justify-center items-center p-6 transition-all duration-300">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 bg-slate-950/80 border-b border-slate-800 flex justify-between items-center shrink-0">
+              <div>
+                <span className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest block font-bold">CINEMA PREVIEW MODE</span>
+                <h4 className="text-xs font-sans font-extrabold text-slate-200 uppercase mt-0.5">
+                  {activePreview.bookTitle} — Chapter {activePreview.chapterNum} Media Draft
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFullscreenCinema(false)}
+                className="p-1 px-3 bg-slate-805 hover:bg-slate-75 * hover:text-white text-slate-400 text-xs font-mono rounded-lg transition-all uppercase cursor-pointer border border-slate-750"
+              >
+                Exit Cinema
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6 overflow-y-auto max-h-[calc(90vh-70px)] pr-4">
+              {/* Audio-Video Studio Player View (reused in cinema layout) */}
+              {(() => {
+                const sentences = activePreview.scriptText.split(".").map(s => s.trim()).filter(Boolean);
+                const currentSentenceText = sentences[currentCaptionIdx] || activePreview.scriptText;
+                const eqBars = isPlaying ? [16, 28, 12, 35, 20, 42, 8, 24, 30, 15, 18, 32, 10, 26, 20, 35, 14, 28] : [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+                return (
+                  <div className="space-y-4">
+                    <div className="bg-slate-950 border border-slate-850 rounded-xl overflow-hidden shadow-2xl relative aspect-video flex flex-col justify-end items-center">
+                      <video
+                        ref={videoRef}
+                        src={activePreview.bRollUrl}
+                        className="absolute inset-0 w-full h-full object-cover z-0 opacity-70"
+                        loop
+                        muted
+                        playsInline
+                      />
+                      {isPlaying && (
+                        <div className="absolute right-4 top-4 z-10 w-11 h-11 rounded-full border border-emerald-500/50 bg-emerald-500/10 backdrop-blur-sm flex items-center justify-center animate-pulse overflow-hidden">
+                          <span className="absolute inset-1 rounded-full border border-dashed border-emerald-500/30 animate-spin" />
+                          <Cpu className="w-5 h-5 text-emerald-400 animate-bounce" />
+                        </div>
+                      )}
+                      <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-800 rounded px-2.5 py-1 text-[9px] font-mono text-emerald-400 flex items-center gap-1.5 uppercase tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                        <span>AV STUDIO PREVIEW: CHAPTER {activePreview.chapterNum}</span>
+                      </div>
+                      <div className="absolute top-10 left-3 z-10 bg-slate-900/60 backdrop-blur-sm border border-slate-800/50 rounded px-2 py-1 text-[8px] font-mono text-slate-300 flex items-center gap-2 uppercase tracking-wide">
+                        <span>1080p</span>
+                        <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                        <span>AVC/H.264</span>
+                        <span className="w-1 h-1 rounded-full bg-slate-500/50" />
+                        <span>{(24.5 + activePreview.chapterNum * 2.1).toFixed(1)} MB</span>
+                      </div>
+                      {!isPlaying && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPlaying(true);
+                            if (audioCtxRef.current?.state === "suspended") {
+                              audioCtxRef.current.resume();
+                            }
+                          }}
+                          className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-slate-900/90 border border-slate-705 text-emerald-400 flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-10 hover:border-emerald-500/55 cursor-pointer shadow-lg"
+                        >
+                          <Play className="w-5 h-5 ml-0.5 fill-current" />
+                        </button>
+                      )}
+                      <div className="absolute bottom-4 left-3 right-3 z-10 bg-slate-950/85 backdrop-blur-md border border-slate-850 rounded-xl p-3 text-center min-h-[50px] flex items-center justify-center shadow-lg">
+                        <p className="text-xs sm:text-sm font-sans text-slate-100 font-bold leading-normal tracking-wide select-text">
+                          {currentSentenceText}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/80 border border-slate-850 rounded-xl p-3.5 space-y-3.5 select-none shadow">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] font-mono text-slate-500 w-6">
+                          0:{playbackTime.toFixed(0).padStart(2, '0')}
+                        </span>
+                        <input
+                          type="range"
+                          min="0"
+                          max={duration}
+                          step="0.1"
+                          value={playbackTime}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setPlaybackTime(val);
+                            if (sentences.length > 0) {
+                              const targetIdx = Math.min(sentences.length - 1, Math.floor((val / duration) * sentences.length));
+                              setCurrentSpeechSentenceIdx(targetIdx);
+                            }
+                          }}
+                          className="flex-1 accent-emerald-500 bg-slate-800 h-1 rounded-lg cursor-pointer focus:outline-none"
+                        />
+                        <span className="text-[9px] font-mono text-slate-500 w-6">
+                          0:{duration}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsPlaying(!isPlaying)}
+                            className="p-2 rounded-lg bg-slate-900 border border-slate-850 hover:border-emerald-500/40 text-emerald-400 transition-all cursor-pointer shadow"
+                          >
+                            {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsPlaying(false);
+                              setPlaybackTime(0);
+                              setCurrentSpeechSentenceIdx(0);
+                            }}
+                            className="p-1 px-2.5 rounded-lg border border-slate-850 hover:bg-slate-900 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono cursor-pointer"
+                          >
+                            Restart
+                          </button>
+                          <select
+                            value={playbackRate}
+                            onChange={(e) => setPlaybackRate(parseFloat(e.target.value))}
+                            className="bg-slate-900 border border-slate-850 text-slate-400 hover:text-slate-200 text-[10px] uppercase font-mono rounded-lg px-1 py-1 h-[26px] cursor-pointer focus:outline-none focus:border-emerald-500/50"
+                            title="Playback speed"
+                          >
+                            <option value={0.5}>0.5x</option>
+                            <option value={1}>1.0x</option>
+                            <option value={2}>2.0x</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-1 h-5 overflow-hidden w-20">
+                          {eqBars.map((h, i) => (
+                            <div
+                              key={i}
+                              className="w-1 bg-emerald-500/85 rounded transition-all duration-300"
+                              style={{ height: `${h}%` }}
+                            />
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSynthSoundTrack(!synthSoundTrack)}
+                            className={`p-1.5 rounded-lg border flex items-center gap-1.5 text-[10px] uppercase font-mono font-bold transition-all cursor-pointer ${
+                              synthSoundTrack
+                                ? "bg-purple-500/15 border-purple-500/40 text-purple-400 font-bold"
+                                : "bg-slate-900/40 border-slate-855 text-slate-500 hover:text-slate-350"
+                            }`}
+                          >
+                            <Music className="w-3.5 h-3.5" />
+                            <span>Synth Drone</span>
+                          </button>
+
+                          <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-850 rounded-lg px-2 py-1.5">
+                            <Volume2 className="w-3.5 h-3.5 text-slate-400" />
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={volume}
+                              onChange={(e) => setVolume(parseFloat(e.target.value))}
+                              className="w-12 bg-slate-800 accent-emerald-500 h-1 rounded cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="p-4 bg-slate-950 rounded-xl border border-slate-850 space-y-2 select-text text-left">
+                <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest block font-bold">Narration Commentary Script:</span>
+                <p className="text-xs text-slate-300 font-mono leading-relaxed max-h-[140px] overflow-y-auto pr-1">
+                  {activePreview.scriptText}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer Status Bar */}
+      <footer className="mt-auto shrink-0 border-t border-slate-800 bg-slate-950 px-4 py-2 flex items-center justify-between text-[10px] font-mono select-none">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-bold uppercase tracking-widest">System Status</span>
+          </div>
+          <div className="h-3 w-[1px] bg-slate-800"></div>
+          <div className="flex items-center gap-2 text-slate-300 uppercase tracking-widest">
+            <span className="text-slate-500">Gemini Pro API:</span>
+            {(settings.hasCustomKey || settings.hasDefaultKey) ? (
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                Connected
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-rose-500">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                Key Missing
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-4 text-slate-500 uppercase tracking-widest">
+          <span>Engine: CrewAI Pipeline</span>
+          <div className="h-3 w-[1px] bg-slate-800"></div>
+          <span>Model: Gemini Pro</span>
+        </div>
+      </footer>
 
     </div>
   );

@@ -517,16 +517,10 @@ async function startServer() {
     return bank[index];
   }
 
-  // Sleep utility helper for pacing simulation logs
-  const getSleepDuration = (ms: number) => {
-    return Math.max(10, Math.round(ms / appSettings.simulationSpeed));
-  };
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, getSleepDuration(ms)));
-
   async function runWorkflowSimulation(book: Book, session: PipelineSession) {
     const checkCancelled = () => {
       if (!activeSession || activeSession.bookId !== book.id) {
-        throw new Error("Simulation aborted - Process was stopped by the user.");
+        throw new Error("Process was stopped by the user.");
       }
     };
 
@@ -540,126 +534,87 @@ async function startServer() {
         level: "INFO",
         message: `[PDF ENGINE] Initializing read buffer for '${book.title}'. Locating page partitions...`
       });
-      await sleep(1500);
       checkCancelled();
-
-      broadcast({
-        type: "LOG_STREAM",
-        node: "PDF_READER",
-        level: "SUCCESS",
-        message: `[PDF ENGINE] Analyzed multi-chapter structures successfully. Found ${book.totalChapters} segments.`
-      });
-      session.step = "CONCEPTS_CACHING";
-      broadcast({ type: "STATE_TICK", session });
 
       // 2. Gemini Context Cache Loading
+      session.step = "CONCEPTS_CACHING";
+      broadcast({ type: "STATE_TICK", session });
       broadcast({
         type: "LOG_STREAM",
         node: "GEMINI_CACHE",
         level: "INFO",
-        message: "[CACHE MANAGER] Initiating Google Gemini Context Cache session. Uploading raw text content (estimated 184,812 tokens)..."
+        message: "[CACHE MANAGER] Initiating Google Gemini Context Cache session. Uploading raw text content..."
       });
-      await sleep(1500);
       checkCancelled();
-
-      broadcast({
-        type: "LOG_STREAM",
-        node: "GEMINI_CACHE",
-        level: "SUCCESS",
-        message: `[CACHE MANAGER] Context Cache loaded successfully! ID: 'cc_3.1_f85fa3' | Status: FIXED ACTIVE | TTL: 1800s. Token queries optimized with a 92% compression ratio.`
-      });
-      session.step = "SCHOLAR_ACTIVE";
-      broadcast({ type: "STATE_TICK", session });
 
       // 3. Scholar Analyzing Chapter Content
+      session.step = "SCHOLAR_ACTIVE";
+      broadcast({ type: "STATE_TICK", session });
       broadcast({
         type: "LOG_STREAM",
         node: "SCHOLAR_AGENT",
         level: "INFO",
-        message: `[SCHOLAR AGENT - GEMINI] Reading text blocks of Chapter ${session.activeChapter}. Summarizing underlying thesis constructs...`
+        message: `[SCHOLAR AGENT - GEMINI] Reading text blocks of Chapter ${session.activeChapter}. Summarizing thesis constructs...`
       });
-      await sleep(2000);
       checkCancelled();
-
+      
       const chapterSummary = `Deconstruction of Chapter ${session.activeChapter}: Core focuses center on leverage, strategic position vectors, and maintaining focus discipline under pressure.`;
-      broadcast({
-        type: "LOG_STREAM",
-        node: "SCHOLAR_AGENT",
-        level: "SUCCESS",
-        message: `[SCHOLAR AGENT - GEMINI] Synthesized academic brief: "${chapterSummary}"`
-      });
+      
+      // 4. Scriptwriter Writing Script
       session.step = "SCRIPTWRITER_ACTIVE";
       broadcast({ type: "STATE_TICK", session });
-
-      // 4. Scriptwriter Writing Script
       broadcast({
         type: "LOG_STREAM",
         node: "SCRIPTWRITER_AGENT",
         level: "INFO",
-        message: `[SCRIPTWRITER - GPT-4O] Designing dynamic hook structures, visual pacing markers, and retaining script brackets...`
+        message: `[SCRIPTWRITER - GEMINI] Designing dynamic hook structures, visual pacing markers...`
       });
       
       const realScript = await generateAIEducationScript(book.title, session.activeChapter);
-      await sleep(2000);
       checkCancelled();
-
       session.scriptText = realScript;
       broadcast({
         type: "LOG_STREAM",
         node: "SCRIPTWRITER_AGENT",
         level: "SUCCESS",
-        message: `[SCRIPTWRITER - GPT-4O] Draft formulated successfully. Hook Index: HIGH. Ready for Fair-Use check.`
+        message: `[SCRIPTWRITER - GEMINI] Draft formulated successfully. Hook Index: HIGH.`
       });
-      session.step = "COPYRIGHT_ACTIVE";
-      broadcast({ type: "STATE_TICK", session });
 
       // 5. Copyright Officer Running check
+      session.step = "COPYRIGHT_ACTIVE";
+      broadcast({ type: "STATE_TICK", session });
       broadcast({
         type: "LOG_STREAM",
         node: "COPYRIGHT_OFFICER",
         level: "INFO",
-        message: `[COPYRIGHT AGENT - GEMINI] Running plagiarism vector checks against Cached Textbook Content 'cc_3.1_f85fa3' to verify Fair Use transformative compliance.`
+        message: `[COPYRIGHT AGENT - GEMINI] Running plagiarism vector checks against Cached Textbook Content...`
       });
-      await sleep(1500);
       checkCancelled();
-
       broadcast({
         type: "LOG_STREAM",
         node: "COPYRIGHT_OFFICER",
         level: "SUCCESS",
-        message: `[COPYRIGHT AGENT - GEMINI] Verification PASSED. Plagiarism index: 1.1% (Copyright-safe). Script complies with educational fair use standards.`
+        message: `[COPYRIGHT AGENT - GEMINI] Verification PASSED. Script complies with educational fair use standards.`
       });
-      session.step = "MEDIA_SYNTHESIZER";
-      broadcast({ type: "STATE_TICK", session });
 
       // 6. Media Synthesizer Assembly
+      session.step = "MEDIA_SYNTHESIZER";
+      broadcast({ type: "STATE_TICK", session });
       broadcast({
         type: "LOG_STREAM",
         node: "MEDIA_COMPILER",
         level: "INFO",
         message: "[MEDIA ENGINE] Synthesizing Voiceover MP3 track from script text. Triggering TTS voiceover matrix..."
       });
-      await sleep(1500);
       checkCancelled();
-
       session.voiceoverFile = `/audio/vo_chapter_${session.activeChapter}.mp3`;
       session.bRollKeywords = ["strategy", "tactics", "focus-room"];
       session.bRollLocalClips = ["https://assets.mixkit.co/videos/preview/mixkit-business-charts-and-graphs-analysis-41740-large.mp4"];
-      
-      broadcast({
-        type: "LOG_STREAM",
-        node: "MEDIA_COMPILER",
-        level: "INFO",
-        message: `[MEDIA ENGINE] Voiceover track finalized. Duration: 24.5s. Querying Pexels stock database on: ${JSON.stringify(session.bRollKeywords)}...`
-      });
-      await sleep(1500);
-      checkCancelled();
-
       broadcast({
         type: "LOG_STREAM",
         node: "MEDIA_COMPILER",
         level: "SUCCESS",
-        message: "[MEDIA ENGINE] MoviePy compositing complete! Linked 2 clips, compiled canvas overlays, rendered centered captions, and locked final target lecture video."
+        message: "[MEDIA ENGINE] MoviePy compositing complete! Final target lecture video is generated."
       });
       
       // 7. Human in the loop Gate
@@ -670,28 +625,26 @@ async function startServer() {
           level: "SUCCESS",
           message: `[HUMAN GATE] Auto-Approve is ACTIVE. Automatically auditing and signing compliance token for Chapter ${session.activeChapter}.`
         });
-        await sleep(1000);
         resumeWorkflowSimulation();
       } else {
         session.step = "WAITING_APPROVAL";
         session.approvalDeferred = true;
         session.paused = true;
         broadcast({ type: "STATE_TICK", session });
-
         broadcast({
           type: "LOG_STREAM",
           node: "HUMAN_GATE",
           level: "WARNING",
-          message: `[HUMAN GATE] Chapter ${session.activeChapter} pipeline paused. Review calculated scripts and video assets in the dashboard inspect pane. Waiting user [Y/N] signal.`
+          message: `[HUMAN GATE] Chapter ${session.activeChapter} pipeline paused. Review scripts and video assets. Waiting user [Y/N] signal.`
         });
       }
 
     } catch (err) {
-      if (err instanceof Error && err.message.includes("Simulation aborted")) {
-        console.log("[PIPELINE] Bailing simulation loop - confirmed manual abort command.");
+      if (err instanceof Error && err.message.includes("stopped by the user")) {
+        console.log("[PIPELINE] Bailing loop - confirmed manual abort command.");
         return;
       }
-      console.error("Simulation pipeline execution failure:", err);
+      console.error("Pipeline execution failure:", err);
       broadcast({
         type: "LOG_STREAM",
         node: "SYSTEM",
@@ -718,21 +671,19 @@ async function startServer() {
         level: "INFO",
         message: `[YOUTUBE CLIENT] Opening credentials. Looking up existing playlist matching: '${targetBook.title}'...`
       });
-      await sleep(1500);
 
       broadcast({
         type: "LOG_STREAM",
         node: "YOUTUBE_PUBLISHER",
         level: "INFO",
-        message: `[YOUTUBE CLIENT] Matching playlist found. ID: 'PL_EDU_${targetBook.title.toUpperCase().replace(/\s/g, "_")}'. Initiating resumable multi-chunk MP4 upload...`
+        message: `[YOUTUBE CLIENT] Matching playlist found. Initiating resumable multi-chunk MP4 upload...`
       });
-      await sleep(2000);
 
       broadcast({
         type: "LOG_STREAM",
         node: "YOUTUBE_PUBLISHER",
         level: "SUCCESS",
-        message: `[YOUTUBE CLIENT] Upload of Chapter ${activeSession.activeChapter} successful! Video ID mapped: 'yt_vid_ea831c9'. Video successfully appended to target playlist.`
+        message: `[YOUTUBE CLIENT] Upload of Chapter ${activeSession.activeChapter} successful! Video successfully appended to target playlist.`
       });
 
       // 9. Final SQL update
@@ -760,7 +711,6 @@ async function startServer() {
       activeSession.step = "PIPELINE_SUCCESS";
       activeSession.activeChapter = targetBook.chaptersCompleted;
       broadcast({ type: "STATE_TICK", activeSession });
-      await sleep(1500);
 
       activeSession = null;
       broadcast({ type: "SESSION_TERMINATED" });
@@ -784,9 +734,8 @@ async function startServer() {
         type: "LOG_STREAM",
         node: "SCRIPTWRITER_AGENT",
         level: "INFO",
-        message: "[SCRIPTWRITER - GPT-4O] Re-aligning hook metrics. Adjusting tone parameters for educational clarity..."
+        message: "[SCRIPTWRITER - GEMINI] Re-aligning hook metrics. Adjusting tone parameters for educational clarity..."
       });
-      await sleep(2000);
 
       // Mutate script with alternative outline
       activeSession.scriptText = `[AUDIENCE HOOK - REGENERATED] Let's look deeper at Chapter ${activeSession.activeChapter} of ${targetBook.title}. Often we misinterpret classical guidance as purely historical. Here is why Sun Tzu's concept of immediate decision vectors governs everything we achieve today.`;
@@ -801,11 +750,9 @@ async function startServer() {
       // Advance directly back to Copyright check
       activeSession.step = "COPYRIGHT_ACTIVE";
       broadcast({ type: "STATE_TICK", activeSession });
-      await sleep(1500);
 
       activeSession.step = "MEDIA_SYNTHESIZER";
       broadcast({ type: "STATE_TICK", activeSession });
-      await sleep(1500);
 
       activeSession.step = "WAITING_APPROVAL";
       activeSession.approvalDeferred = true;
