@@ -4,7 +4,7 @@ import asyncio
 from crewai import Agent, Task, Crew
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from moviepy.editor import ColorClip, TextClip, AudioFileClip, CompositeVideoClip
+from moviepy import ColorClip, TextClip, AudioFileClip, CompositeVideoClip
 from gtts import gTTS
 
 class EducationalPipeline:
