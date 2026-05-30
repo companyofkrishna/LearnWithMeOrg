@@ -14,8 +14,10 @@ import {
   ArrowRight,
   BookOpen,
   StopCircle,
-  HelpCircle
+  HelpCircle,
+  Activity
 } from "lucide-react";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 interface LogEvent {
   feature: string;
@@ -41,9 +43,6 @@ export default function App() {
   // Config state
   const [books, setBooks] = useState<string[]>([]);
   const [selectedBook, setSelectedBook] = useState<string>("");
-  const [manualPath, setManualPath] = useState<string>("");
-  const [manualPathValid, setManualPathValid] = useState<boolean | null>(null);
-  const [manualPathError, setManualPathError] = useState<string>("");
 
   // Key configurations with auto-save trackers
   const [geminiKey, setGeminiKey] = useState<string>("");
@@ -73,6 +72,8 @@ export default function App() {
   const ws = useRef<WebSocket | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
+  const [chartData, setChartData] = useState<{ time: string, chapters: number, duration: number }[]>([]);
+
   // Load backend configurations
   useEffect(() => {
     connectWebSocket();
@@ -82,6 +83,25 @@ export default function App() {
       if (ws.current) ws.current.close();
     };
   }, []);
+
+  // Update chart data dynamically as completed chapters increase
+  useEffect(() => {
+    if (pipeline.completedChapters > 0 || (pipeline.totalChapters > 0 && pipeline.completedChapters === 0)) {
+      setChartData(prev => {
+        const last = prev[prev.length - 1];
+        if (!last || last.chapters !== pipeline.completedChapters) {
+           return [...prev, {
+             time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+             chapters: pipeline.completedChapters,
+             duration: pipeline.completedChapters * 4.5 // Simulated duration: 4.5 mins per chapter
+           }];
+        }
+        return prev;
+      });
+    } else if (!pipeline.isProcessing && pipeline.completedChapters === 0) {
+      setChartData([]); // reset
+    }
+  }, [pipeline.completedChapters, pipeline.totalChapters, pipeline.isProcessing]);
 
   // Scroll to logs end
   useEffect(() => {
@@ -208,7 +228,6 @@ export default function App() {
         setUploadProgress("Success!");
         await fetchBooks();
         setSelectedBook(data.filename);
-        setManualPath(""); // Clear manual overrides
         setTimeout(() => setUploadProgress(""), 2000);
       } else {
         setUploadProgress("Upload failed.");
@@ -235,41 +254,11 @@ export default function App() {
     }
   };
 
-  // Validation of Custom Manual Paths on Server Disk
-  const validateManualPath = async () => {
-    if (!manualPath) {
-      setManualPathValid(null);
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/books/validate-path", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath: manualPath })
-      });
-      const data = await res.json();
-      if (data.valid) {
-        setManualPathValid(true);
-        setManualPathError("");
-        setSelectedBook(""); // Deselect dropdown to indicate manual path is active
-      } else {
-        setManualPathValid(false);
-        setManualPathError(data.error || "File path could not be found.");
-      }
-    } catch (err) {
-      setManualPathValid(false);
-      setManualPathError("Failed connecting to path verification logic.");
-    }
-  };
-
   const startPipeline = async () => {
     setLogs([]);
     try {
       const payload: any = {};
-      if (manualPath && manualPathValid) {
-        payload.manualPath = manualPath;
-      } else if (selectedBook) {
+      if (selectedBook) {
         payload.filename = selectedBook;
       }
 
@@ -430,85 +419,13 @@ export default function App() {
             </div>
           </div>
 
-          {/* DYNAMIC BOOK DROPDOWN & OVERRIDE PANEL */}
+          {/* DYNAMIC UPLOAD REGISTRATION PANEL */}
           <div className="rounded-xl bg-[#0f172a] border border-slate-800 p-4 shadow-sm space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-cyan-400" />
                 <h2 className="text-xs font-bold uppercase tracking-widest text-slate-200">Source Book Selection</h2>
               </div>
-              <HelpCircle className="w-3.5 h-3.5 text-slate-500 hover:text-slate-300 cursor-pointer" title="Select a file from folder books_input/" />
-            </div>
-
-            {/* File Dropdown Selector */}
-            <div>
-              <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400 mb-1.5">
-                Processed Books in Workspace
-              </label>
-              {books.length > 0 ? (
-                <select
-                  value={selectedBook}
-                  onChange={(e) => {
-                    setSelectedBook(e.target.value);
-                    setManualPath(""); // override manual paths
-                  }}
-                  className="w-full bg-[#080d16] border border-slate-800 text-slate-200 rounded px-2 py-2 text-xs focus:border-emerald-500 outline-none"
-                >
-                  {books.map((f, idx) => (
-                    <option key={idx} value={f}>
-                      📖 {f}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <div className="text-[11px] text-rose-400 border border-rose-500/10 bg-rose-500/5 p-2 rounded">
-                  ⚠️ No book PDFs discovered in books_input/
-                </div>
-              )}
-            </div>
-
-            {/* MANUAL OVERRIDE DETECTION FIELD */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-[9px] font-mono uppercase tracking-wider text-slate-400">
-                  Manual Path Fallback Overrides
-                </label>
-                {manualPathValid === true && (
-                  <span className="text-[8px] uppercase font-bold text-emerald-400 tracking-wider font-mono">
-                    ● File Confirmed
-                  </span>
-                )}
-                {manualPathValid === false && (
-                  <span className="text-[8px] uppercase font-bold text-rose-400 tracking-wider font-mono">
-                    ● File Off-line
-                  </span>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="e.g. books_input/learning_guide.pdf"
-                  value={manualPath}
-                  onChange={(e) => {
-                    setManualPath(e.target.value);
-                    setManualPathValid(null);
-                  }}
-                  className="flex-1 bg-[#080d16] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
-                />
-                <button
-                  type="button"
-                  onClick={validateManualPath}
-                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded transition-colors cursor-pointer"
-                >
-                  Link
-                </button>
-              </div>
-              {manualPathError && (
-                <p className="text-[10px] text-rose-400 mt-1 leading-snug">{manualPathError}</p>
-              )}
-              <p className="text-[9px] text-slate-500 mt-1.5">
-                Auto-detects invalid entries. Type file name or full disk address to link custom PDFs instantly.
-              </p>
             </div>
 
             {/* DRAG AND DROP HIGH-FLEXIBILITY UPLOAD REGISTRATION Card */}
@@ -529,8 +446,8 @@ export default function App() {
               />
               <label htmlFor="file-input" className="cursor-pointer block">
                 <UploadCloud className="w-7 h-7 mx-auto text-slate-400 mb-2" />
-                <span className="text-xs block font-semibold text-slate-300">Drag &amp; Drop custom Book PDF</span>
-                <span className="text-[10px] block text-slate-500 mt-1">or click here to browser-select file</span>
+                <span className="text-xs block font-semibold text-slate-300">Click to choose a Book PDF</span>
+                <span className="text-[10px] block text-slate-500 mt-1">or drag & drop here</span>
                 {uploadProgress && (
                   <span className="text-[10px] font-mono block text-emerald-400 mt-2 font-bold animate-pulse">
                     {uploadProgress}
@@ -538,6 +455,16 @@ export default function App() {
                 )}
               </label>
             </div>
+
+            {/* Show Selected File */}
+            {selectedBook && (
+              <div className="flex items-center justify-between bg-[#080d16] border border-emerald-500/30 rounded px-3 py-2">
+                 <div className="flex items-center gap-2 overflow-hidden">
+                    <FileCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-mono text-emerald-300 truncate">{selectedBook}</span>
+                 </div>
+              </div>
+            )}
           </div>
 
           {/* INTERACTIVE COMPILATION PROGRESS & CUSTOM STEPPER */}
@@ -626,118 +553,163 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex-1 flex overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-[2] flex overflow-hidden border-b border-slate-800">
             
-            {/* Split Top Panel: Raw Extracted Book Stream */}
-            <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
-              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
-                <FileCheck className="w-4 h-4 text-slate-400" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                  1. Raw Book Segment Cache (PyMuPDF)
-                </span>
+              {/* Split Top Panel: Raw Extracted Book Stream */}
+              <div className="w-1/2 border-r border-slate-800 flex flex-col bg-slate-950/20 h-full">
+                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center gap-2 shrink-0">
+                  <FileCheck className="w-4 h-4 text-slate-400" />
+                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                    1. Raw Book Segment Cache (PyMuPDF)
+                  </span>
+                </div>
+                <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                  {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
+                </div>
               </div>
-              <div className="flex-1 p-4 overflow-y-auto text-xs font-mono text-slate-400 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                {pipeline.rawTextPreview || "System initialized. Drop your book PDF. Select a document and launch the workflow to extract the textbook metadata streams..."}
+
+              {/* Split Bottom Panel: Synthesized Text Drafts */}
+              <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
+                <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Compass className="w-4 h-4 text-emerald-400" />
+                    <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
+                      2. Generated Lesson Script & Video
+                    </span>
+                  </div>
+                  {pipeline.videoUrl && (
+                    <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
+                      ● Video Compiled
+                    </span>
+                  )}
+                </div>
+
+                {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
+                {pipeline.videoUrl && (
+                  <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
+                    <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative group shadow-lg shadow-black/40">
+                      <video 
+                        key={pipeline.videoUrl}
+                        controls 
+                        autoPlay={pipeline.completedChapters > 0}
+                        className="w-full h-full object-contain"
+                        referrerPolicy="no-referrer"
+                      >
+                        <source src={pipeline.videoUrl} type="video/mp4" />
+                        Your browser does not support the video tag.
+                      </video>
+                      {/* Minimalist Watermark overlay */}
+                      <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
+                        Media Render Active • 1080p
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center mt-2 px-1">
+                      <span className="text-[10px] font-mono text-slate-400">
+                        Synthesized Stream Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
+                      </span>
+                      <div className="flex items-center gap-3 cursor-pointer">
+                        <a 
+                          href={pipeline.videoUrl} 
+                          download={`lecture_export.mp4`}
+                          className="text-[10px] text-cyan-400 hover:text-cyan-300 hover:underline font-mono"
+                        >
+                          Download Video ↓
+                        </a>
+                        <a 
+                          href={pipeline.videoUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="text-[10px] text-emerald-400 hover:text-emerald-300 hover:underline font-mono"
+                        >
+                          Open Video ↗
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
+                  {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
+                </div>
+
+                {/* DUAL GATE APPROVAL THRESHOLD */}
+                {pipeline.waitingApproval && (
+                  <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
+                    <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
+                      <AlertTriangle className="w-7 h-7 animate-pulse" />
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
+                      Human Authorization Threshold
+                    </h3>
+                    <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
+                      The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
+                    </p>
+                    
+                    <div className="flex gap-4">
+                      <button 
+                        onClick={stopPipeline} 
+                        className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
+                      >
+                        Dismount
+                      </button>
+                      <button 
+                        onClick={approvePipeline} 
+                        className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
+                      >
+                        Sign off script <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Split Bottom Panel: Synthesized Text Drafts */}
-            <div className="w-1/2 flex flex-col bg-slate-950/30 h-full relative">
-              <div className="bg-[#0b101f] px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-emerald-400" />
-                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">
-                    2. Generated Lesson Script & Video
-                  </span>
-                </div>
-                {pipeline.videoUrl && (
-                  <span className="text-[9px] font-mono bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-bold animate-pulse">
-                    ● Video Compiled
-                  </span>
-                )}
-              </div>
-
-              {/* DYNAMIC VIDEO PLAYER EMBEDDED IF ACTIVE */}
-              {pipeline.videoUrl && (
-                <div className="p-4 bg-[#0a0f1d] border-b border-slate-800 shrink-0">
-                  <div className="rounded-lg overflow-hidden border border-slate-800 bg-black aspect-video relative group shadow-lg shadow-black/40">
-                    <video 
-                      key={pipeline.videoUrl}
-                      controls 
-                      autoPlay={pipeline.completedChapters > 0}
-                      className="w-full h-full object-contain"
-                      referrerPolicy="no-referrer"
-                    >
-                      <source src={pipeline.videoUrl} type="video/mp4" />
-                      Your browser does not support the video tag.
-                    </video>
-                    {/* Minimalist Watermark overlay */}
-                    <div className="absolute top-2 right-2 bg-slate-950/80 backdrop-blur-sm px-2.5 py-1 rounded text-[9.5px] font-mono text-emerald-400 border border-emerald-500/10 pointer-events-none select-none tracking-wider uppercase">
-                      Media Render Active • 1080p
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-center mt-2 px-1">
-                    <span className="text-[10px] font-mono text-slate-400">
-                      Synthesized Stream Feed: <span className="text-cyan-400">{pipeline.currentChapterTitle || "Chapter Overview"}</span>
-                    </span>
-                    <a 
-                      href={pipeline.videoUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="text-[10px] text-emerald-400 hover:underline font-mono"
-                    >
-                      Open Video ↗
-                    </a>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex-1 p-5 overflow-y-auto text-sm font-serif text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-emerald-500/20">
-                {pipeline.finalScriptOutput || "Awaiting multi-agent syllabus structuring. The agents (Scholar and Scriptwriter) will automatically isolate concepts, map chapters, and unwrap drafts..."}
-              </div>
-
-              {/* DUAL GATE APPROVAL THRESHOLD */}
-              {pipeline.waitingApproval && (
-                <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
-                  <div className="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400">
-                    <AlertTriangle className="w-7 h-7 animate-pulse" />
-                  </div>
-                  <h3 className="text-sm font-bold text-slate-230 uppercase tracking-widest mb-2 text-amber-400">
-                    Human Authorization Threshold
-                  </h3>
-                  <p className="text-xs text-slate-300 mb-6 max-w-sm leading-relaxed">
-                    The Scholar and Scriptwriter pipeline have completed the overall textbook compilation. Please review the script details. Do you authorize synthesis for video creation?
-                  </p>
-                  
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={stopPipeline} 
-                      className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold uppercase rounded transition-colors cursor-pointer"
-                    >
-                      Dismount
-                    </button>
-                    <button 
-                      onClick={approvePipeline} 
-                      className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider rounded shadow-lg shadow-emerald-500/20 border-0 transition-all hover:scale-[1.01] cursor-pointer"
-                    >
-                      Sign off script <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
+            {/* Analytics Bottom Panel */}
+            <div className="flex-[1] bg-[#070b13] p-4 flex flex-col min-h-[180px] border-t border-slate-800">
+               <div className="flex items-center gap-2 mb-3 shrink-0">
+                  <Activity className="w-4 h-4 text-cyan-400" />
+                  <span className="text-[10px] font-bold text-slate-300 uppercase font-mono">Pipeline Telemetry Analytics</span>
+               </div>
+               <div className="flex-1 w-full min-h-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={chartData} margin={{ top: 5, right: 20, left: -20, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="colorChapters" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorDuration" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                      <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={8} />
+                      <YAxis yAxisId="left" stroke="#475569" fontSize={10} />
+                      <YAxis yAxisId="right" orientation="right" stroke="#475569" fontSize={10} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', fontSize: '12px' }}
+                        itemStyle={{ color: '#cbd5e1' }}
+                      />
+                      <Area yAxisId="left" type="monotone" name="Chapters Processed" dataKey="chapters" stroke="#10b981" fillOpacity={1} fill="url(#colorChapters)" />
+                      <Area yAxisId="right" type="monotone" name="Video Duration (m)" dataKey="duration" stroke="#0ea5e9" fillOpacity={1} fill="url(#colorDuration)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+               </div>
             </div>
           </div>
         </div>
 
-        {/* RIGHT PANE: Telemetry logs */}
-        <div className="w-[300px] shrink-0 border-l border-slate-800 flex flex-col bg-[#0b101f] select-text">
-          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center px-4 shrink-0">
+        {/* RIGHT PANE: Telemetry logs & Chart */}
+        <div className="w-[320px] shrink-0 border-l border-slate-800 flex flex-col bg-[#0b101f] select-text">
+          <div className="h-10 bg-[#0c1221] border-b border-slate-800 flex items-center px-4 shrink-0 justify-between">
             <span className="text-[10px] font-mono text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5 text-cyan-400" /> Pipeline Console
             </span>
           </div>
 
-          <div className="flex-1 p-4 overflow-y-auto text-[10.5px] font-mono space-y-3 min-h-0">
+          <div className="flex-1 p-4 overflow-y-auto text-[10.5px] font-mono space-y-3 min-h-0 border-b border-slate-800">
             {logs.length === 0 ? (
               <span className="text-slate-500 block leading-relaxed italic">
                 System idle inside port 3000 mapping layer. Ready to run textbook file. Select a book from the list and begin folder scan extraction.
@@ -760,6 +732,48 @@ export default function App() {
               ))
             )}
             <div ref={logsEndRef} />
+          </div>
+
+          {/* DATA VISUALIZATION PANEL */}
+          <div className="h-1/3 min-h-[200px] shrink-0 flex flex-col bg-[#0c1221]">
+            <div className="h-8 border-b border-slate-800 flex items-center px-4 shrink-0">
+               <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest flex items-center gap-1.5">
+                 <Activity className="w-3.5 h-3.5 text-emerald-400" /> Telemetry Metrics
+               </span>
+            </div>
+            <div className="flex-1 p-3 min-h-0">
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorChapters" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorDuration" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '4px' }}
+                      itemStyle={{ fontSize: '10px', fontWeight: 'bold' }}
+                      labelStyle={{ fontSize: '10px', color: '#94a3b8', marginBottom: '2px' }}
+                    />
+                    <Area type="monotone" dataKey="chapters" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorChapters)" name="Chapters Processed" />
+                    <Area type="monotone" dataKey="duration" stroke="#0ea5e9" strokeWidth={2} fillOpacity={1} fill="url(#colorDuration)" name="Video Duration (min)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center opacity-40">
+                  <Activity className="w-6 h-6 text-slate-500 mb-2" />
+                  <span className="text-[10px] font-mono text-slate-400">Awaiting vector synthesis...</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
