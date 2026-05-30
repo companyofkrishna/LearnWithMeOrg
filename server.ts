@@ -250,25 +250,23 @@ app.post("/api/youtube/upload", async (req, res) => {
   });
 
   // Simulate upload delay
-  setTimeout(() => {
-    const videoId = Math.random().toString(36).substring(2, 11);
-    const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
-    
-    if (chapter) {
-      chapter.uploading = false;
-      chapter.youtubeUrl = youtubeUrl;
-      broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
-    }
+  const videoId = Math.random().toString(36).substring(2, 11);
+  const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+  
+  if (chapter) {
+    chapter.uploading = false;
+    chapter.youtubeUrl = youtubeUrl;
+    broadcast({ type: "PIPELINE_UPDATE", state: pipelineState });
+  }
 
-    broadcast({
-      type: "LOG",
-      payload: {
-        feature: "YOUTUBE_PUBLISHER",
-        status: "VERIFIED SUCCESS",
-        message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
-      }
-    });
-  }, 4000);
+  broadcast({
+    type: "LOG",
+    payload: {
+      feature: "YOUTUBE_PUBLISHER",
+      status: "VERIFIED SUCCESS",
+      message: `Successfully uploaded ${chapterTitle} to YouTube. URL: ${youtubeUrl}`
+    }
+  });
 
   res.json({ success: true, message: "Upload started" });
 });
@@ -362,8 +360,7 @@ app.post("/api/flow/stop", (req, res) => {
   res.json({ success: true });
 });
 
-// Helper function to safely wait
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// Removed async sleep delay
 
 async function runPipeline(filePath: string, name: string) {
   try {
@@ -373,8 +370,6 @@ async function runPipeline(filePath: string, name: string) {
       status: "EXECUTING",
       message: `Analyzing document bounds for custom book file: ${name}`
     });
-
-    await delay(1000);
 
     const dataBuffer = fs.readFileSync(filePath);
     let fullText = "";
@@ -448,8 +443,6 @@ async function runPipeline(filePath: string, name: string) {
         message: `Scholar Agent is analyzing content mapping for [${title}]...`
       });
 
-      await delay(1500);
-
       // Call Gemini if key exists, otherwise use rich high-fidelity simulated response
       let summaryText = "";
       let hasKey = !!configStore.geminiKey;
@@ -488,8 +481,6 @@ async function runPipeline(filePath: string, name: string) {
         status: "EXECUTING",
         message: `Scriptwriter Agent is adapting educational outline for [${title}] into a video script...`
       });
-
-      await delay(1500);
 
       let scriptText = "";
       if (hasKey) {
@@ -531,8 +522,6 @@ async function runPipeline(filePath: string, name: string) {
         status: "EXECUTING",
         message: `Initiated Plagiarism Vector scanning. Running semantic transforms...`
       });
-
-      await delay(1000);
 
       broadcast({
         type: "TELEMETRY",
@@ -585,8 +574,6 @@ async function resumePipeline() {
       message: "Opening voiceover renderer engine. Generating speech vectors..."
     });
 
-    await delay(1800);
-
     broadcast({
       type: "TELEMETRY",
       feature: "MEDIA_SYNTH_ENGINE",
@@ -600,8 +587,6 @@ async function resumePipeline() {
       status: "EXECUTING",
       message: "Verifying publisher credentials. Refresh token authenticated."
     });
-
-    await delay(1500);
 
     broadcast({
       type: "TELEMETRY",

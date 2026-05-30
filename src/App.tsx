@@ -8,7 +8,6 @@ import {
   Play, 
   FileText, 
   Database,
-  UploadCloud,
   FileCheck,
   Compass,
   ArrowRight,
@@ -792,6 +791,26 @@ export default function App() {
                       </div>
                     </div>
                     
+                    {/* Video Metadata Panel */}
+                    <div className="w-full mt-4 bg-[#070b13] border border-slate-800/80 rounded p-3 grid grid-cols-4 gap-4 divide-x divide-slate-800/60 shadow-inner">
+                      <div className="flex flex-col px-2">
+                        <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Resolution</span>
+                        <span className="text-[10px] font-mono text-emerald-400">1080p (16:9)</span>
+                      </div>
+                      <div className="flex flex-col px-2 pl-4">
+                        <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Frame Rate</span>
+                        <span className="text-[10px] font-mono text-emerald-400">30 FPS</span>
+                      </div>
+                      <div className="flex flex-col px-2 pl-4">
+                         <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Audio Codec</span>
+                         <span className="text-[10px] font-mono text-emerald-400">AAC / 320kbps</span>
+                      </div>
+                      <div className="flex flex-col px-2 pl-4">
+                         <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Est. Size</span>
+                         <span className="text-[10px] font-mono text-emerald-400">~42 MB</span>
+                      </div>
+                    </div>
+
                     {/* Multi-chapter video selection list */}
                     {pipeline.generatedChapters && pipeline.generatedChapters.length > 1 && (
                       <div className="mt-4 pt-3 border-t border-slate-800 flex gap-2 overflow-x-auto pb-1 pb-scroll">
